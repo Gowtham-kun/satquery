@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import L from "leaflet";
+import { checkWebGPUCompatibility, generateOnClientGPU } from "./services/webgpu.js";
+import GpuLockScreen from "./components/GpuLockScreen.jsx";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
 
@@ -12,16 +14,19 @@ const PRESET_REGIONS = [
 ];
 
 export default function App() {
+  const [gpuState, setGpuState] = useState({ checking: true, compatible: false, reason: "", info: null });
   const [minLon, setMinLon] = useState(81.5);
   const [minLat, setMinLat] = useState(16.5);
   const [maxLon, setMaxLon] = useState(82.5);
   const [maxLat, setMaxLat] = useState(17.5);
   const [isDrawingMode, setIsDrawingMode] = useState(false);
+  const [modelLoadingStatus, setModelLoadingStatus] = useState("");
+  const [gpuExecutionCount, setGpuExecutionCount] = useState(0);
 
   const [messages, setMessages] = useState([
     {
       role: "assistant",
-      content: "Welcome to SatQuery AI (SIH Problem Statement 167). I combine Optical sensors (Sentinel-2) and Radio Wave SAR sensors (Sentinel-1) with Vision-Language intelligence. Click or drag on the map to choose any region, then ask me anything about the terrain, nearby seas/cities, vegetation, or flood risks!"
+      content: "Welcome to SatQuery AI (SIH Problem Statement 167). Client-side WebGPU acceleration is enabled. I combine Optical sensors (Sentinel-2) and Radio Wave SAR sensors (Sentinel-1) with Vision-Language intelligence running directly on your GPU. Click or drag on the map to choose any region, then ask me anything about the terrain, nearby seas/cities, vegetation, or flood risks!"
     }
   ]);
   const [inputText, setInputText] = useState("");
@@ -39,12 +44,26 @@ export default function App() {
   const chatScrollRef = useRef(null);
   const isDrawingModeRef = useRef(isDrawingMode);
 
+  const verifyGpu = async () => {
+    setGpuState({ checking: true, compatible: false, reason: "", info: null });
+    const res = await checkWebGPUCompatibility();
+    if (res.isCompatible) {
+      setGpuState({ checking: false, compatible: true, reason: "", info: res.gpuInfo });
+    } else {
+      setGpuState({ checking: false, compatible: false, reason: res.reason, info: null });
+    }
+  };
+
+  useEffect(() => {
+    verifyGpu();
+  }, []);
+
   useEffect(() => {
     isDrawingModeRef.current = isDrawingMode;
   }, [isDrawingMode]);
 
   useEffect(() => {
-    if (!mapRef.current || mapInstanceRef.current) return;
+    if (!gpuState.compatible || !mapRef.current || mapInstanceRef.current) return;
     const map = L.map(mapRef.current).setView([(minLat + maxLat) / 2, (minLon + maxLon) / 2], 8);
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
@@ -100,36 +119,34 @@ export default function App() {
 
     map.on("click", (e) => {
       if (isDrawingModeRef.current) return;
-      const latSpan = Math.abs(maxLat - minLat) || 0.8;
-      const lonSpan = Math.abs(maxLon - minLon) || 0.8;
       const cLat = e.latlng.lat;
       const cLon = e.latlng.lng;
-      setMinLon(parseFloat((cLon - lonSpan / 2).toFixed(4)));
-      setMaxLon(parseFloat((cLon + lonSpan / 2).toFixed(4)));
-      setMinLat(parseFloat((cLat - latSpan / 2).toFixed(4)));
-      setMaxLat(parseFloat((cLat + latSpan / 2).toFixed(4)));
+      const dLat = (maxLat - minLat) / 2;
+      const dLon = (maxLon - minLon) / 2;
+      const nS = parseFloat((cLat - dLat).toFixed(4));
+      const nN = parseFloat((cLat + dLat).toFixed(4));
+      const nW = parseFloat((cLon - dLon).toFixed(4));
+      const nE = parseFloat((cLon + dLon).toFixed(4));
+      setMinLon(nW);
+      setMinLat(nS);
+      setMaxLon(nE);
+      setMaxLat(nN);
     });
-
-    return () => {
-      map.remove();
-      mapInstanceRef.current = null;
-    };
-  }, []);
+  }, [gpuState.compatible]);
 
   useEffect(() => {
-    if (rectLayerRef.current && mapInstanceRef.current) {
-      const bounds = [[minLat, minLon], [maxLat, maxLon]];
-      rectLayerRef.current.setBounds(bounds);
-      if (nwMarkerRef.current) nwMarkerRef.current.setLatLng([maxLat, minLon]);
-      if (seMarkerRef.current) seMarkerRef.current.setLatLng([minLat, maxLon]);
-    }
+    if (!mapInstanceRef.current || !rectLayerRef.current) return;
+    const b = [[minLat, minLon], [maxLat, maxLon]];
+    rectLayerRef.current.setBounds(b);
+    if (nwMarkerRef.current) nwMarkerRef.current.setLatLng([maxLat, minLon]);
+    if (seMarkerRef.current) seMarkerRef.current.setLatLng([minLat, maxLon]);
   }, [minLon, minLat, maxLon, maxLat]);
 
   useEffect(() => {
     if (chatScrollRef.current) {
       chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
     }
-  }, [messages, isSending]);
+  }, [messages, isSending, modelLoadingStatus]);
 
   const setPreset = (bbox) => {
     setMinLon(bbox[0]);
@@ -151,18 +168,40 @@ export default function App() {
     setIsSending(true);
 
     try {
-      const res = await fetch(`${API_BASE}/api/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query,
-          bbox: [minLon, minLat, maxLon, maxLat],
-          chat_history: newHistory.map(m => ({ role: m.role, content: m.content }))
-        })
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setMessages([...newHistory, { role: "assistant", content: data.reply }]);
+      setModelLoadingStatus("Initializing WebGPU shader pipeline...");
+      const sysPrompt = `You are SatQuery AI (SIH Problem Statement 167), an AI satellite vision-language assistant fusing Sentinel-1 SAR (C-band radio wave radar) and Sentinel-2 Optical multi-spectral imagery. Active bounding box: Longitudes [${minLon}, ${maxLon}], Latitudes [${minLat}, ${maxLat}]. Provide concise, conversational, accurate geospatial intelligence. Answer queries about nearby bodies of water, coastal borders, terrain, vegetation, and flood risks.`;
+
+      let clientAnswer = "";
+      try {
+        clientAnswer = await generateOnClientGPU(sysPrompt, query, (p) => {
+          if (p?.status === "progress" && p.total) {
+            const pct = Math.round((p.loaded / p.total) * 100);
+            setModelLoadingStatus(`Loading model weights into GPU VRAM: ${pct}% (${p.file || "weights"})`);
+          } else if (p?.status === "done") {
+            setModelLoadingStatus("WebGPU model loaded. Executing GPU inference...");
+          }
+        });
+      } catch (clientErr) {
+        clientAnswer = "";
+      }
+
+      if (clientAnswer && clientAnswer.length > 10) {
+        setGpuExecutionCount((c) => c + 1);
+        setMessages([...newHistory, { role: "assistant", content: clientAnswer, webgpu: true }]);
+      } else {
+        const res = await fetch(`${API_BASE}/api/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query,
+            bbox: [minLon, minLat, maxLon, maxLat],
+            chat_history: newHistory.map((m) => ({ role: m.role, content: m.content }))
+          })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        setMessages([...newHistory, { role: "assistant", content: data.reply }]);
+      }
     } catch (err) {
       setMessages([
         ...newHistory,
@@ -170,6 +209,7 @@ export default function App() {
       ]);
     } finally {
       setIsSending(false);
+      setModelLoadingStatus("");
     }
   };
 
@@ -228,14 +268,59 @@ export default function App() {
     } catch (err) {}
   };
 
+  if (gpuState.checking) {
+    return (
+      <div style={{
+        height: "100vh",
+        width: "100vw",
+        background: "#0a0d14",
+        color: "#94a3b8",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        fontFamily: "system-ui, sans-serif"
+      }}>
+        <div style={{ fontSize: "32px", marginBottom: "16px" }}>⚡</div>
+        <div style={{ fontSize: "16px", fontWeight: "600", color: "#38bdf8", marginBottom: "8px" }}>
+          Scanning WebGPU Hardware Acceleration...
+        </div>
+        <div style={{ fontSize: "12px", color: "#64748b" }}>
+          Verifying physical GPU adapter and compute context
+        </div>
+      </div>
+    );
+  }
+
+  if (!gpuState.compatible) {
+    return <GpuLockScreen reason={gpuState.reason} onRetry={verifyGpu} />;
+  }
+
   return (
     <div style={{ display: "flex", height: "100vh", width: "100vw", overflow: "hidden", fontFamily: "sans-serif" }}>
-      <div style={{ flex: "0 0 60%", display: "flex", flexDirection: "column", borderRight: "2px solid #ccc", padding: "12px", boxSizing: "border-box" }}>
-        <header style={{ marginBottom: "6px" }}>
-          <h2 style={{ margin: "0 0 2px 0" }}>SatQuery AI: Optical & SAR Fusion (SIH 167)</h2>
-          <span style={{ fontSize: "12px", color: "#555" }}>
-            Click anywhere on the map to center the area, toggle <strong>Draw Mode</strong> to drag a new box, or use presets.
-          </span>
+      <div style={{ flex: "0 0 60%", display: "flex", flexDirection: "column", borderRight: "2px solid #e2e8f0", padding: "12px", boxSizing: "border-box", background: "#f8fafc" }}>
+        <header style={{ marginBottom: "6px", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div>
+            <h2 style={{ margin: "0 0 2px 0", color: "#0f172a", fontSize: "18px" }}>SatQuery AI: Optical & SAR Fusion (SIH 167)</h2>
+            <span style={{ fontSize: "12px", color: "#64748b" }}>
+              Click anywhere on the map to center the area, toggle <strong>Draw Mode</strong> to drag a new box, or use presets.
+            </span>
+          </div>
+          <div style={{
+            background: "linear-gradient(135deg, #059669 0%, #047857 100%)",
+            color: "#ecfdf5",
+            padding: "4px 10px",
+            borderRadius: "14px",
+            fontSize: "11px",
+            fontWeight: "600",
+            display: "flex",
+            alignItems: "center",
+            gap: "5px",
+            boxShadow: "0 2px 6px rgba(5, 150, 105, 0.25)"
+          }}>
+            <span>🟢</span>
+            <span>WebGPU: {gpuState.info?.vendor} {gpuState.info?.architecture || gpuState.info?.device}</span>
+          </div>
         </header>
 
         <div style={{ display: "flex", gap: "6px", alignItems: "center", marginBottom: "8px", flexWrap: "wrap" }}>
@@ -279,100 +364,138 @@ export default function App() {
           <button onClick={handleFetchTelemetry} disabled={isFetchingTelemetry} style={{ padding: "6px 12px", cursor: "pointer" }}>
             {isFetchingTelemetry ? "Fetching Telemetry..." : "Fetch Satellite Footprints"}
           </button>
-          <button onClick={handleDownloadGeoJSON} disabled={!activeGeoJSON} style={{ padding: "6px 12px", cursor: activeGeoJSON ? "pointer" : "not-allowed" }}>
-            Download Bhuvan GeoJSON
-          </button>
+          {activeGeoJSON && (
+            <button onClick={handleDownloadGeoJSON} style={{ padding: "6px 12px", cursor: "pointer", background: "#28a745", color: "#fff", border: "none", borderRadius: "4px" }}>
+              Export ISRO Bhuvan GeoJSON
+            </button>
+          )}
           {telemetrySummary && <span style={{ fontSize: "12px", color: "#333" }}>{telemetrySummary}</span>}
         </div>
       </div>
 
-      <div style={{ flex: "0 0 40%", display: "flex", flexDirection: "column", height: "100%", boxSizing: "border-box", backgroundColor: "#f9f9f9" }}>
-        <div style={{ padding: "12px", borderBottom: "1px solid #ddd", backgroundColor: "#fff" }}>
-          <h3 style={{ margin: "0 0 4px 0" }}>Vision-Language Assistant (VLM + SAR)</h3>
-          <div style={{ fontSize: "12px", color: "#555" }}>
-            Selected Bounding Box: <strong>[{minLon.toFixed(2)}, {minLat.toFixed(2)}, {maxLon.toFixed(2)}, {maxLat.toFixed(2)}]</strong>
+      <div style={{ flex: "0 0 40%", display: "flex", flexDirection: "column", background: "#fdfdfd", boxSizing: "border-box" }}>
+        <div style={{ padding: "12px 16px", borderBottom: "1px solid #eee", background: "#fafafa", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <h3 style={{ margin: "0 0 2px 0", fontSize: "16px" }}>Vision-Language Geospatial Assistant</h3>
+            <span style={{ fontSize: "11px", color: "#666" }}>
+              Active Area: [{minLon.toFixed(2)}, {minLat.toFixed(2)}] to [{maxLon.toFixed(2)}, {maxLat.toFixed(2)}]
+            </span>
           </div>
-          <div style={{ fontSize: "11px", color: "#007700", marginTop: "2px" }}>
-            Active Sensors: Optical (Sentinel-2 MSI) + Radio Wave Radar (Sentinel-1 SAR C-band)
-          </div>
+          <span style={{
+            fontSize: "10px",
+            background: "#eff6ff",
+            color: "#2563eb",
+            padding: "2px 8px",
+            borderRadius: "10px",
+            fontWeight: "600",
+            border: "1px solid #bfdbfe"
+          }}>
+            ⚡ WebGPU Acceleration
+          </span>
         </div>
 
-        <div ref={chatScrollRef} style={{ flex: 1, overflowY: "auto", padding: "12px", display: "flex", flexDirection: "column", gap: "12px" }}>
+        <div style={{ padding: "8px 16px", background: "#f4f6f8", borderBottom: "1px solid #e5e5e5", display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontSize: "11px", color: "#555", fontWeight: "bold" }}>Try asking:</span>
+          {[
+            "Which sea or city is close to this point?",
+            "What is the terrain and vegetation like here?",
+            "Are there flood risks detected?"
+          ].map((sample, i) => (
+            <button
+              key={i}
+              onClick={() => handleSendMessage(sample)}
+              disabled={isSending}
+              style={{
+                fontSize: "10px",
+                padding: "3px 8px",
+                background: "#fff",
+                border: "1px solid #ccc",
+                borderRadius: "10px",
+                cursor: "pointer",
+                color: "#0066cc"
+              }}
+            >
+              {sample}
+            </button>
+          ))}
+        </div>
+
+        <div ref={chatScrollRef} style={{ flex: 1, padding: "16px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "12px" }}>
           {messages.map((m, idx) => (
             <div
               key={idx}
               style={{
                 alignSelf: m.role === "user" ? "flex-end" : "flex-start",
                 maxWidth: "85%",
-                backgroundColor: m.role === "user" ? "#0066cc" : "#ffffff",
-                color: m.role === "user" ? "#ffffff" : "#111111",
                 padding: "10px 14px",
-                borderRadius: m.role === "user" ? "14px 14px 2px 14px" : "14px 14px 14px 2px",
-                boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
-                fontSize: "14px",
-                lineHeight: "1.45"
+                borderRadius: "12px",
+                fontSize: "13px",
+                lineHeight: "1.45",
+                background: m.role === "user" ? "#0275d8" : "#f1f3f5",
+                color: m.role === "user" ? "#fff" : "#212529",
+                boxShadow: "0 1px 2px rgba(0,0,0,0.08)",
+                whiteSpace: "pre-wrap"
               }}
             >
-              <div style={{ fontSize: "11px", marginBottom: "4px", opacity: 0.8, fontWeight: "bold" }}>
-                {m.role === "user" ? "You" : "SatQuery AI (VLM + Telemetry)"}
-              </div>
-              <div style={{ whiteSpace: "pre-wrap" }}>{m.content}</div>
+              {m.content}
+              {m.webgpu && (
+                <div style={{ marginTop: "6px", fontSize: "10px", color: "#059669", fontWeight: "600" }}>
+                  ⚡ Processed directly on your GPU via WebGPU
+                </div>
+              )}
             </div>
           ))}
           {isSending && (
-            <div style={{ alignSelf: "flex-start", backgroundColor: "#fff", padding: "8px 12px", borderRadius: "14px", fontSize: "13px", color: "#777" }}>
-              Querying Sentinel-1 SAR & Sentinel-2 Optical sensors and generating dynamic VLM answer...
+            <div style={{ alignSelf: "flex-start", padding: "10px 14px", borderRadius: "12px", fontSize: "13px", background: "#f1f3f5", color: "#666", display: "flex", flexDirection: "column", gap: "4px" }}>
+              <span>Synthesizing SAR & Optical multi-sensor fusion...</span>
+              {modelLoadingStatus && (
+                <span style={{ fontSize: "11px", color: "#2563eb", fontWeight: "500" }}>
+                  {modelLoadingStatus}
+                </span>
+              )}
             </div>
           )}
         </div>
 
-        <div style={{ padding: "8px 12px", borderTop: "1px solid #eee", backgroundColor: "#fff", display: "flex", flexWrap: "wrap", gap: "6px" }}>
-          <button
-            onClick={() => handleSendMessage("Which sea or city is close to this point?")}
-            disabled={isSending}
-            style={{ fontSize: "11px", padding: "4px 8px", cursor: "pointer", borderRadius: "12px", border: "1px solid #ccc", background: "#f0f0f0" }}
-          >
-            Which sea or city is close?
-          </button>
-          <button
-            onClick={() => handleSendMessage("What is the terrain and vegetation like here based on optical and radar sensors?")}
-            disabled={isSending}
-            style={{ fontSize: "11px", padding: "4px 8px", cursor: "pointer", borderRadius: "12px", border: "1px solid #ccc", background: "#f0f0f0" }}
-          >
-            Terrain & vegetation?
-          </button>
-          <button
-            onClick={() => handleSendMessage("Are there flood risks detected using SAR radar backscatter?")}
-            disabled={isSending}
-            style={{ fontSize: "11px", padding: "4px 8px", cursor: "pointer", borderRadius: "12px", border: "1px solid #ccc", background: "#f0f0f0" }}
-          >
-            Flood risks via SAR?
-          </button>
-        </div>
-
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            handleSendMessage();
-          }}
-          style={{ display: "flex", padding: "10px 12px", borderTop: "1px solid #ddd", backgroundColor: "#fff", gap: "8px" }}
-        >
+        <div style={{ padding: "12px 16px", borderTop: "1px solid #eee", background: "#fafafa", display: "flex", gap: "8px" }}>
           <input
             type="text"
-            placeholder="Ask anything about the selected area..."
+            placeholder="Ask about nearby water bodies, cities, terrain, or flood risks..."
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                handleSendMessage();
+              }
+            }}
             disabled={isSending}
-            style={{ flex: 1, padding: "8px 12px", fontSize: "14px", borderRadius: "4px", border: "1px solid #ccc" }}
+            style={{
+              flex: 1,
+              padding: "8px 12px",
+              borderRadius: "6px",
+              border: "1px solid #ccc",
+              fontSize: "13px",
+              outline: "none"
+            }}
           />
           <button
-            type="submit"
+            onClick={() => handleSendMessage()}
             disabled={isSending || !inputText.trim()}
-            style={{ padding: "8px 16px", backgroundColor: "#0066cc", color: "#fff", border: "none", borderRadius: "4px", cursor: isSending ? "not-allowed" : "pointer" }}
+            style={{
+              padding: "8px 16px",
+              background: isSending || !inputText.trim() ? "#aaa" : "#0275d8",
+              color: "#fff",
+              border: "none",
+              borderRadius: "6px",
+              cursor: isSending || !inputText.trim() ? "not-allowed" : "pointer",
+              fontWeight: "bold",
+              fontSize: "13px"
+            }}
           >
             Send
           </button>
-        </form>
+        </div>
       </div>
     </div>
   );
