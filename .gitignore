@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Production builds
+dist/
+frontend/dist/
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.venv/
+env/
+venv/
+*.egg-info/
+
+# Environment & Credentials
+.env
+.env.local
+.env.*.local
+
+# Agent skills cache
+.agent/
+temp_*
+
+# OS files
+.DS_Store
+Thumbs.db

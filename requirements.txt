@@ -1,0 +1,15 @@
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+pydantic==2.13.4
+httpx==0.28.1
+shapely==2.1.2
+geojson==3.3.0
+langchain==1.4.2
+langchain-community==0.4.2
+langchain-core==1.6.4
+sentence-transformers==6.1.0
+faiss-cpu==1.15.1
+huggingface-hub==1.28.0
+accelerate==1.15.0
+bitsandbytes==0.50.2
+playwright==1.62.0
