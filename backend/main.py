@@ -12,6 +12,7 @@ from backend.services.geojson_pipeline import (
     serialize_geojson_bytes
 )
 from backend.services.rag_service import execute_geospatial_rag
+from backend.services.geo_resolver import resolve_geographic_context
 from backend.services.chat_orchestrator import ChatRequest, ChatResponse, process_chat_message
 
 app = FastAPI(title="SatQuery AI", version="1.0.0")
@@ -33,6 +34,9 @@ class QueryRequest(BaseModel):
     query: str
     geojson_context: Dict[str, Any]
 
+class GeoResolveRequest(BaseModel):
+    bbox: List[float] = Field(..., min_length=4, max_length=4)
+
 @app.get("/health")
 async def health_check() -> Dict[str, str]:
     return {"status": "ok", "service": "satquery-ai"}
@@ -46,27 +50,26 @@ async def fetch_and_fuse(req: FetchRequest) -> Dict[str, Any]:
             max_lon=req.bbox[2],
             max_lat=req.bbox[3]
         )
-    except Exception as e:
-        raise HTTPException(status_code=422, detail=f"Invalid bounding box: {str(e)}")
-    scenes = await fetch_satellite_metadata(req.bbox, req.start_date, req.end_date)
-    fused_records = fuse_satellite_records(scenes["sar"], scenes["optical"], user_bbox)
-    geojson_fc = build_bhuvan_geojson_collection(fused_records, user_bbox)
-    return {
-        "status": "success",
-        "sar_count": len(scenes["sar"]),
-        "optical_count": len(scenes["optical"]),
-        "fused_count": len(fused_records),
-        "geojson": geojson_fc
-    }
+        scenes = await fetch_satellite_metadata(req.bbox, req.start_date, req.end_date)
+        fused_records = fuse_satellite_records(scenes["sar"], scenes["optical"], user_bbox)
+        geojson_data = build_bhuvan_geojson_collection(fused_records)
+        return {
+            "status": "success",
+            "sar_count": len(scenes["sar"]),
+            "optical_count": len(scenes["optical"]),
+            "fused_count": len(fused_records),
+            "geojson": geojson_data
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 @app.post("/api/export/geojson")
 async def export_geojson(geojson_payload: Dict[str, Any]):
     if not geojson_payload or "features" not in geojson_payload:
         raise HTTPException(status_code=400, detail="Invalid GeoJSON payload")
     data_bytes = serialize_geojson_bytes(geojson_payload)
-    stream = io.BytesIO(data_bytes)
     return StreamingResponse(
-        stream,
+        io.BytesIO(data_bytes),
         media_type="application/geo+json",
         headers={
             "Content-Disposition": "attachment; filename=satquery_export.geojson",
@@ -80,12 +83,16 @@ async def query_rag(req: QueryRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="Query cannot be empty")
     return await execute_geospatial_rag(req.query, req.geojson_context)
 
+@app.post("/api/geo/resolve")
+async def geo_resolve(req: GeoResolveRequest) -> Dict[str, Any]:
+    return await resolve_geographic_context(req.bbox)
+
 @app.post("/api/chat")
 async def chat_conversational(req: ChatRequest) -> ChatResponse:
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Chat query cannot be empty")
-    reply = await process_chat_message(req.query, req.bbox, req.chat_history)
-    return ChatResponse(reply=reply)
+    reply, geo_context = await process_chat_message(req.query, req.bbox, req.chat_history)
+    return ChatResponse(reply=reply, geo_context=geo_context)
 
 if __name__ == "__main__":
     import uvicorn

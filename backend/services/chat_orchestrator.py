@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import os
 from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel, Field
@@ -33,12 +33,12 @@ def _get_local_generator():
         _LOCAL_TOKENIZER = AutoTokenizer.from_pretrained(model_name)
         _LOCAL_LLM = AutoModelForCausalLM.from_pretrained(
             model_name,
-            torch_dtype=torch.float16 if device.startswith("cuda") else torch.float32,
+            dtype=torch.float16 if device.startswith("cuda") else torch.float32,
             device_map=device
         )
     return _LOCAL_LLM, _LOCAL_TOKENIZER
 
-async def process_chat_message(query: str, bbox: List[float], chat_history: List[ChatMessage]) -> str:
+async def process_chat_message(query: str, bbox: List[float], chat_history: List[ChatMessage]) -> Tuple[str, Dict[str, Any]]:
     today = datetime.now(timezone.utc)
     start_str = (today - timedelta(days=60)).strftime("%Y-%m-%d")
     end_str = today.strftime("%Y-%m-%d")
@@ -70,30 +70,38 @@ async def process_chat_message(query: str, bbox: List[float], chat_history: List
         elevation=elevation
     )
 
-    city = geo_info.get("city", "Local Region")
-    state = geo_info.get("state", "Regional State")
+    city = geo_info.get("city", "Selected Location")
+    state = geo_info.get("state", "")
     country = geo_info.get("country", "India")
-    water_bodies = ", ".join(geo_info.get("nearby_water_bodies", [])) or "coastal/inland waterways"
-    terrain = geo_info.get("terrain_profile", "alluvial deltaic plains")
+    is_coastal = geo_info.get("is_coastal", False)
+    coastal_sea = geo_info.get("coastal_sea")
+    coastal_summary = geo_info.get("coastal_summary", "")
+    water_bodies = ", ".join(geo_info.get("nearby_water_bodies", [])) or "Inland drainage channels"
+    terrain = geo_info.get("terrain_profile", "Undulating plains")
 
-    context_prompt = (
-        f"Geographic Ground Truth for Selected Bounding Box {bbox}:\n"
-        f"- Administrative Location: {city}, {state}, {country}.\n"
-        f"- Nearby Major Seas / Water Bodies: {water_bodies}.\n"
-        f"- Terrain Profile & Elevation: {terrain} (approx. {elevation:.0f} meters above sea level).\n"
-        f"- Optical Sensor (Sentinel-2 MSI L2A): Scene ID {opt_scene_id}, acquired {opt_time}. Cloud cover is {cloud_cover:.1f}%. Surface observation: {multimodal['optical_visual_summary']}.\n"
-        f"- Radio Wave Sensor (SAR - Sentinel-1 C-Band Radar): Scene ID {sar_scene_id}, acquired {sar_time}. Polarizations: {', '.join(pols)}. Microwave characteristics: {multimodal['sar_radar_summary']}.\n"
-        f"- Sensor Fusion Status: Dual-sensor passes spatially aligned. SAR radar penetrates clouds to detect water bodies and flood inundation via specular reflection, while Sentinel-2 provides optical multispectral reflectance."
-    )
+    if not is_coastal:
+        marine_rule = f"No, {city} is an inland city and does NOT have any oceans or seas. It is located {coastal_summary}. Local inland water bodies include {water_bodies}."
+    else:
+        marine_rule = f"Yes, {city} directly borders the {coastal_sea} ({coastal_summary})."
 
     system_message = (
-        "You are SatQuery AI, an expert earth observation assistant for SIH Problem Statement 167. "
-        "Your role is to fuse Synthetic Aperture Radar (SAR radio wave sensor) and Optical satellite imagery with Vision-Language understanding. "
-        "Answer the user's question directly, clearly, and conversationally in fluent English based on the provided live sensor telemetry, visual observations, and geographic landmarks. "
-        "Never output raw JSON, code blocks, or raw dictionaries. Synthesize both optical and radio wave (SAR) sensor facts naturally into your explanation."
+        f"You are SatQuery AI (SIH Problem Statement 167), an expert earth observation assistant fusing Sentinel-1 SAR radio wave radar and Sentinel-2 Optical satellite imagery.\n\n"
+        f"SELECTED REGION GROUND TRUTH:\n"
+        f"- Administrative Location: {city}, {state}, {country}.\n"
+        f"- Marine & Coastal Status: {coastal_summary}.\n"
+        f"- Local Water Bodies: {water_bodies}.\n"
+        f"- Terrain & Elevation: {terrain} (approx. {elevation:.0f} meters elevation).\n"
+        f"- Optical Sensor (Sentinel-2 MSI): Scene {opt_scene_id}, cloud cover {cloud_cover:.1f}%. Observation: {multimodal['optical_visual_summary']}.\n"
+        f"- Radio Wave SAR Sensor (Sentinel-1 C-Band): Scene {sar_scene_id}, polarizations {', '.join(pols)}. Microwave radar: {multimodal['sar_radar_summary']}.\n\n"
+        f"CRITICAL TRUTH DIRECTIVES:\n"
+        f"1. If the user asks which city, place, or location was selected, explicitly answer: 'You have selected {city}, {state}, {country}.'\n"
+        f"2. If the user asks if there are oceans, seas, or coastlines:\n"
+        f"   - Response: '{marine_rule}'\n"
+        f"3. Always combine optical sensor reflectance and SAR microwave radar observations naturally.\n"
+        f"4. Never output raw JSON, code blocks, or placeholders."
     )
 
-    messages = [{"role": "system", "content": f"{system_message}\n\n{context_prompt}"}]
+    messages = [{"role": "system", "content": system_message}]
     for m in chat_history[-3:]:
         messages.append({"role": m.role, "content": m.content})
     messages.append({"role": "user", "content": query})
@@ -106,19 +114,21 @@ async def process_chat_message(query: str, bbox: List[float], chat_history: List
             outputs = model.generate(
                 **inputs,
                 max_new_tokens=220,
-                temperature=0.35,
-                do_sample=True,
+                temperature=0.15,
+                do_sample=False,
                 repetition_penalty=1.15
             )
         generated_tokens = outputs[0][len(inputs.input_ids[0]):]
         reply_text = tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
         if reply_text:
-            return reply_text
-    except Exception as e:
+            return reply_text, geo_info
+    except Exception:
         pass
 
-    return (
-        f"For your selected area in {city}, {state} (near {water_bodies}, elevation ~{elevation:.0f}m): "
+    fallback_reply = (
+        f"For your selected area in {city}, {state} (elevation ~{elevation:.0f}m): "
+        f"{marine_rule} "
         f"Sentinel-2 optical sensors report {cloud_cover:.1f}% cloud cover with {multimodal['optical_visual_summary']}, "
-        f"while Sentinel-1 C-band radio wave radar ({', '.join(pols)}) actively penetrates the atmosphere to map surface water and flood extents via specular backscatter."
+        f"while Sentinel-1 C-band radio wave radar ({', '.join(pols)}) actively maps surface water features via specular backscatter."
     )
+    return fallback_reply, geo_info
