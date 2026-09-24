@@ -46,6 +46,9 @@ export async function getClientGPUPipeline(onProgress) {
     const { pipeline, env } = await import('@huggingface/transformers');
     env.allowLocalModels = false;
     env.useBrowserCache = true;
+    if (env.webgpu) {
+      env.webgpu.powerPreference = 'high-performance';
+    }
     cachedPipeline = await pipeline('text-generation', 'onnx-community/Qwen2.5-0.5B-Instruct', {
       device: 'webgpu',
       dtype: 'q4',

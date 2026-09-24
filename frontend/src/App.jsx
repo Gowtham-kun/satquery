@@ -396,20 +396,29 @@ export default function App() {
               Click anywhere on the map to center the area, toggle <strong>Draw Mode</strong> to drag a new box, or use presets.
             </span>
           </div>
-          <div style={{
-            background: "linear-gradient(135deg, #059669 0%, #047857 100%)",
-            color: "#ecfdf5",
-            padding: "4px 10px",
-            borderRadius: "14px",
-            fontSize: "11px",
-            fontWeight: "600",
-            display: "flex",
-            alignItems: "center",
-            gap: "5px",
-            boxShadow: "0 2px 6px rgba(5, 150, 105, 0.25)"
-          }}>
-            <span>🟢</span>
-            <span>WebGPU: {gpuState.info?.vendor} {gpuState.info?.architecture || gpuState.info?.device}</span>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "3px" }}>
+            <div style={{
+              background: (gpuState.info?.vendor?.toLowerCase().includes("intel") || gpuState.info?.description?.toLowerCase().includes("intel"))
+                ? "linear-gradient(135deg, #d97706 0%, #b45309 100%)"
+                : "linear-gradient(135deg, #059669 0%, #047857 100%)",
+              color: "#fff",
+              padding: "4px 10px",
+              borderRadius: "14px",
+              fontSize: "11px",
+              fontWeight: "600",
+              display: "flex",
+              alignItems: "center",
+              gap: "5px",
+              boxShadow: "0 2px 6px rgba(0,0,0,0.15)"
+            }}>
+              <span>{(gpuState.info?.vendor?.toLowerCase().includes("intel") || gpuState.info?.description?.toLowerCase().includes("intel")) ? "🟡" : "🟢"}</span>
+              <span>WebGPU: {gpuState.info?.vendor} {gpuState.info?.architecture || gpuState.info?.device}</span>
+            </div>
+            {(gpuState.info?.vendor?.toLowerCase().includes("intel") || gpuState.info?.description?.toLowerCase().includes("intel")) && (
+              <span style={{ fontSize: "10px", color: "#b45309", fontWeight: "600" }}>
+                Dedicated RTX 4050 configured! Restart browser window to apply.
+              </span>
+            )}
           </div>
         </header>
 
