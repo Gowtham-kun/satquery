@@ -24,6 +24,7 @@ export default function App() {
   const [maxLon, setMaxLon] = useState(78.6);
   const [maxLat, setMaxLat] = useState(17.5);
   const [isDrawingMode, setIsDrawingMode] = useState(false);
+  const [baseMapMode, setBaseMapMode] = useState("satellite");
   const [modelLoadingStatus, setModelLoadingStatus] = useState("");
   const [selectedLocation, setSelectedLocation] = useState(null);
   const [isResolvingLocation, setIsResolvingLocation] = useState(false);
@@ -40,7 +41,7 @@ export default function App() {
   const [messages, setMessages] = useState([
     {
       role: "assistant",
-      content: "Welcome to SatQuery AI (SIH Problem Statement 167). I combine Optical sensors (Sentinel-2) and Radio Wave SAR sensors (Sentinel-1) with Vision-Language geospatial intelligence. Click or drag on the map to select any region, then ask me anything about the terrain, nearby seas/cities, vegetation, or flood risks!"
+      content: "Welcome to SatQuery AI (SIH Problem Statement 167). I combine Optical sensors (Sentinel-2) and Radio Wave SAR sensors (Sentinel-1) with Vision-Language geospatial intelligence. Drag any corner handle or the center ✥ icon to resize or move your area, toggle Draw Mode to sketch a new bounding box, or click presets!"
     }
   ]);
   const [inputText, setInputText] = useState("");
@@ -51,12 +52,22 @@ export default function App() {
 
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
+  const tileLayerRef = useRef(null);
+  const labelsLayerRef = useRef(null);
   const rectLayerRef = useRef(null);
-  const nwMarkerRef = useRef(null);
-  const seMarkerRef = useRef(null);
+  const nwHandleRef = useRef(null);
+  const neHandleRef = useRef(null);
+  const swHandleRef = useRef(null);
+  const seHandleRef = useRef(null);
+  const centerHandleRef = useRef(null);
   const geojsonLayerRef = useRef(null);
   const chatScrollRef = useRef(null);
   const isDrawingModeRef = useRef(isDrawingMode);
+  const currentBboxRef = useRef({ minLon, minLat, maxLon, maxLat });
+
+  useEffect(() => {
+    currentBboxRef.current = { minLon, minLat, maxLon, maxLat };
+  }, [minLon, minLat, maxLon, maxLat]);
 
   const verifyGpu = async () => {
     setGpuState({ checking: true, compatible: false, reason: "", info: null });
@@ -75,6 +86,51 @@ export default function App() {
   useEffect(() => {
     isDrawingModeRef.current = isDrawingMode;
   }, [isDrawingMode]);
+
+  const updateVisualBbox = (coords) => {
+    const { minLon: w, minLat: s, maxLon: e, maxLat: n } = coords;
+    const bounds = [[s, w], [n, e]];
+    if (rectLayerRef.current) rectLayerRef.current.setBounds(bounds);
+    if (nwHandleRef.current) nwHandleRef.current.setLatLng([n, w]);
+    if (neHandleRef.current) neHandleRef.current.setLatLng([n, e]);
+    if (swHandleRef.current) swHandleRef.current.setLatLng([s, w]);
+    if (seHandleRef.current) seHandleRef.current.setLatLng([s, e]);
+    if (centerHandleRef.current) centerHandleRef.current.setLatLng([(s + n) / 2, (w + e) / 2]);
+  };
+
+  const commitBbox = () => {
+    const { minLon: w, minLat: s, maxLon: e, maxLat: n } = currentBboxRef.current;
+    setMinLon(parseFloat(w.toFixed(4)));
+    setMinLat(parseFloat(s.toFixed(4)));
+    setMaxLon(parseFloat(e.toFixed(4)));
+    setMaxLat(parseFloat(n.toFixed(4)));
+  };
+
+  const switchBaseMap = (mode) => {
+    if (!mapInstanceRef.current) return;
+    const map = mapInstanceRef.current;
+    if (tileLayerRef.current) map.removeLayer(tileLayerRef.current);
+    if (labelsLayerRef.current) map.removeLayer(labelsLayerRef.current);
+
+    if (mode === "satellite" || mode === "hybrid") {
+      tileLayerRef.current = L.tileLayer(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        { maxZoom: 19, attribution: "&copy; Esri, Earthstar Geographics" }
+      ).addTo(map);
+      if (mode === "hybrid") {
+        labelsLayerRef.current = L.tileLayer(
+          "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+          { maxZoom: 19 }
+        ).addTo(map);
+      }
+    } else {
+      tileLayerRef.current = L.tileLayer(
+        "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        { maxZoom: 19, attribution: "&copy; OpenStreetMap contributors" }
+      ).addTo(map);
+    }
+    setBaseMapMode(mode);
+  };
 
   const loadImageryForCurrentBbox = async () => {
     setIsLoadingImagery(true);
@@ -170,22 +226,140 @@ export default function App() {
   useEffect(() => {
     if (!gpuState.compatible || !mapRef.current || mapInstanceRef.current) return;
     const map = L.map(mapRef.current).setView([(minLat + maxLat) / 2, (minLon + maxLon) / 2], 9);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      attribution: "&copy; OpenStreetMap contributors"
-    }).addTo(map);
+
+    const satTile = L.tileLayer(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      { maxZoom: 19, attribution: "&copy; Esri, Earthstar Geographics" }
+    ).addTo(map);
+    tileLayerRef.current = satTile;
 
     const bounds = [[minLat, minLon], [maxLat, maxLon]];
-    const rect = L.rectangle(bounds, { color: "#ff6600", weight: 2, fillOpacity: 0.15 }).addTo(map);
+    const rect = L.rectangle(bounds, {
+      color: "#ff6600",
+      weight: 2.5,
+      fillColor: "#ff6600",
+      fillOpacity: 0.18,
+      dashArray: "4, 4"
+    }).addTo(map);
     rectLayerRef.current = rect;
 
-    const nwMarker = L.circleMarker([maxLat, minLon], { radius: 7, color: "#d9534f", fillOpacity: 0.8, draggable: true }).addTo(map);
-    const seMarker = L.circleMarker([minLat, maxLon], { radius: 7, color: "#0275d8", fillOpacity: 0.8, draggable: true }).addTo(map);
-    nwMarker.bindTooltip("Drag NW Corner", { permanent: false });
-    seMarker.bindTooltip("Drag SE Corner", { permanent: false });
-    nwMarkerRef.current = nwMarker;
-    seMarkerRef.current = seMarker;
+    const createCornerIcon = (cursor) => L.divIcon({
+      className: "custom-bbox-handle",
+      html: `<div style="
+        width: 14px;
+        height: 14px;
+        background: #ffffff;
+        border: 3px solid #ff6600;
+        border-radius: 50%;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.7);
+        cursor: ${cursor};
+      "></div>`,
+      iconSize: [14, 14],
+      iconAnchor: [7, 7]
+    });
 
+    const createCenterIcon = () => L.divIcon({
+      className: "custom-bbox-center",
+      html: `<div style="
+        width: 26px;
+        height: 26px;
+        background: rgba(255, 102, 0, 0.95);
+        border: 2px solid #ffffff;
+        border-radius: 50%;
+        color: #ffffff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 13px;
+        font-weight: bold;
+        box-shadow: 0 3px 10px rgba(0,0,0,0.8);
+        cursor: grab;
+      ">✥</div>`,
+      iconSize: [26, 26],
+      iconAnchor: [13, 13]
+    });
+
+    const nw = L.marker([maxLat, minLon], { draggable: true, icon: createCornerIcon("nwse-resize"), zIndexOffset: 1000 }).addTo(map);
+    const ne = L.marker([maxLat, maxLon], { draggable: true, icon: createCornerIcon("nesw-resize"), zIndexOffset: 1000 }).addTo(map);
+    const sw = L.marker([minLat, minLon], { draggable: true, icon: createCornerIcon("nesw-resize"), zIndexOffset: 1000 }).addTo(map);
+    const se = L.marker([minLat, maxLon], { draggable: true, icon: createCornerIcon("nwse-resize"), zIndexOffset: 1000 }).addTo(map);
+    const center = L.marker([(minLat + maxLat) / 2, (minLon + maxLon) / 2], { draggable: true, icon: createCenterIcon(), zIndexOffset: 999 }).addTo(map);
+
+    nw.bindTooltip("Drag NW Corner to resize", { permanent: false, direction: "top" });
+    ne.bindTooltip("Drag NE Corner to resize", { permanent: false, direction: "top" });
+    sw.bindTooltip("Drag SW Corner to resize", { permanent: false, direction: "bottom" });
+    se.bindTooltip("Drag SE Corner to resize", { permanent: false, direction: "bottom" });
+    center.bindTooltip("Drag ✥ to move selection", { permanent: false, direction: "top" });
+
+    nw.on("drag", (e) => {
+      const lat = e.latlng.lat;
+      const lon = e.latlng.lng;
+      if (lat > currentBboxRef.current.minLat + 0.01 && lon < currentBboxRef.current.maxLon - 0.01) {
+        currentBboxRef.current.maxLat = lat;
+        currentBboxRef.current.minLon = lon;
+        updateVisualBbox(currentBboxRef.current);
+      }
+    });
+    nw.on("dragend", commitBbox);
+
+    ne.on("drag", (e) => {
+      const lat = e.latlng.lat;
+      const lon = e.latlng.lng;
+      if (lat > currentBboxRef.current.minLat + 0.01 && lon > currentBboxRef.current.minLon + 0.01) {
+        currentBboxRef.current.maxLat = lat;
+        currentBboxRef.current.maxLon = lon;
+        updateVisualBbox(currentBboxRef.current);
+      }
+    });
+    ne.on("dragend", commitBbox);
+
+    sw.on("drag", (e) => {
+      const lat = e.latlng.lat;
+      const lon = e.latlng.lng;
+      if (lat < currentBboxRef.current.maxLat - 0.01 && lon < currentBboxRef.current.maxLon - 0.01) {
+        currentBboxRef.current.minLat = lat;
+        currentBboxRef.current.minLon = lon;
+        updateVisualBbox(currentBboxRef.current);
+      }
+    });
+    sw.on("dragend", commitBbox);
+
+    se.on("drag", (e) => {
+      const lat = e.latlng.lat;
+      const lon = e.latlng.lng;
+      if (lat < currentBboxRef.current.maxLat - 0.01 && lon > currentBboxRef.current.minLon + 0.01) {
+        currentBboxRef.current.minLat = lat;
+        currentBboxRef.current.maxLon = lon;
+        updateVisualBbox(currentBboxRef.current);
+      }
+    });
+    se.on("dragend", commitBbox);
+
+    let centerDragStart = null;
+    center.on("dragstart", (e) => {
+      centerDragStart = e.latlng;
+    });
+    center.on("drag", (e) => {
+      if (!centerDragStart) return;
+      const dLat = e.latlng.lat - centerDragStart.lat;
+      const dLon = e.latlng.lng - centerDragStart.lng;
+      currentBboxRef.current.minLon += dLon;
+      currentBboxRef.current.maxLon += dLon;
+      currentBboxRef.current.minLat += dLat;
+      currentBboxRef.current.maxLat += dLat;
+      centerDragStart = e.latlng;
+      updateVisualBbox(currentBboxRef.current);
+    });
+    center.on("dragend", () => {
+      centerDragStart = null;
+      commitBbox();
+    });
+
+    nwHandleRef.current = nw;
+    neHandleRef.current = ne;
+    swHandleRef.current = sw;
+    seHandleRef.current = se;
+    centerHandleRef.current = center;
     mapInstanceRef.current = map;
 
     let isDrawing = false;
@@ -214,6 +388,8 @@ export default function App() {
       const s = parseFloat(currentBounds.getSouth().toFixed(4));
       const e_lon = parseFloat(currentBounds.getEast().toFixed(4));
       const n = parseFloat(currentBounds.getNorth().toFixed(4));
+      currentBboxRef.current = { minLon: w, minLat: s, maxLon: e_lon, maxLat: n };
+      updateVisualBbox(currentBboxRef.current);
       setMinLon(w);
       setMinLat(s);
       setMaxLon(e_lon);
@@ -221,30 +397,11 @@ export default function App() {
       startLatLng = null;
       setIsDrawingMode(false);
     });
-
-    map.on("click", (e) => {
-      if (isDrawingModeRef.current) return;
-      const cLat = e.latlng.lat;
-      const cLon = e.latlng.lng;
-      const dLat = (maxLat - minLat) / 2;
-      const dLon = (maxLon - minLon) / 2;
-      const nS = parseFloat((cLat - dLat).toFixed(4));
-      const nN = parseFloat((cLat + dLat).toFixed(4));
-      const nW = parseFloat((cLon - dLon).toFixed(4));
-      const nE = parseFloat((cLon + dLon).toFixed(4));
-      setMinLon(nW);
-      setMinLat(nS);
-      setMaxLon(nE);
-      setMaxLat(nN);
-    });
   }, [gpuState.compatible]);
 
   useEffect(() => {
     if (!mapInstanceRef.current || !rectLayerRef.current) return;
-    const b = [[minLat, minLon], [maxLat, maxLon]];
-    rectLayerRef.current.setBounds(b);
-    if (nwMarkerRef.current) nwMarkerRef.current.setLatLng([maxLat, minLon]);
-    if (seMarkerRef.current) seMarkerRef.current.setLatLng([minLat, maxLon]);
+    updateVisualBbox({ minLon, minLat, maxLon, maxLat });
   }, [minLon, minLat, maxLon, maxLat]);
 
   useEffect(() => {
@@ -324,7 +481,7 @@ export default function App() {
         }
         geojsonLayerRef.current = L.geoJSON(data.geojson, {
           style: (f) => ({
-            color: f.properties?.sar_all_weather_validity ? "#0066cc" : "#28a745",
+            color: f.properties?.sar_all_weather_validity ? "#00e5ff" : "#00e676",
             weight: 2,
             fillOpacity: 0.15
           })
@@ -387,13 +544,13 @@ export default function App() {
 
   return (
     <div style={{ display: "flex", height: "100vh", width: "100vw", overflow: "hidden", fontFamily: "sans-serif" }}>
-      {/* Left Map & Area Selection Pane (60%) */}
+      {/* Left Map & Area Selection Pane (58%) */}
       <div style={{ flex: "0 0 58%", display: "flex", flexDirection: "column", borderRight: "2px solid #e2e8f0", padding: "12px", boxSizing: "border-box", background: "#f8fafc" }}>
         <header style={{ marginBottom: "6px", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div>
             <h2 style={{ margin: "0 0 2px 0", color: "#0f172a", fontSize: "18px" }}>SatQuery AI: Optical & SAR VLM Fusion (SIH 167)</h2>
             <span style={{ fontSize: "12px", color: "#64748b" }}>
-              Click anywhere on the map to center the area, toggle <strong>Draw Mode</strong> to drag a new box, or use presets.
+              Drag <strong>corner handles</strong> to resize freely, drag <strong>center ✥</strong> to move, or toggle <strong>Draw Mode</strong>.
             </span>
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "3px" }}>
@@ -422,6 +579,7 @@ export default function App() {
           </div>
         </header>
 
+        {/* Selected location ground truth banner */}
         <div style={{
           background: selectedLocation ? "#f0fdf4" : "#f8fafc",
           border: selectedLocation ? "1px solid #bbf7d0" : "1px solid #e2e8f0",
@@ -448,54 +606,118 @@ export default function App() {
               <span style={{ color: "#64748b" }}>Selecting region...</span>
             )}
           </div>
-          <span style={{ fontSize: "11px", color: "#0369a1", fontWeight: "500" }}>
+          <span style={{ fontSize: "11px", color: "#0369a1", fontWeight: "600", background: "#e0f2fe", padding: "2px 8px", borderRadius: "6px" }}>
             [{minLon.toFixed(2)}, {minLat.toFixed(2)}] to [{maxLon.toFixed(2)}, {maxLat.toFixed(2)}]
           </span>
         </div>
 
-        <div style={{ display: "flex", gap: "6px", alignItems: "center", marginBottom: "8px", flexWrap: "wrap" }}>
-          <button
-            onClick={() => setIsDrawingMode(!isDrawingMode)}
-            style={{
-              padding: "6px 12px",
-              backgroundColor: isDrawingMode ? "#d9534f" : "#0275d8",
-              color: "#fff",
-              border: "none",
-              borderRadius: "4px",
-              cursor: "pointer",
-              fontWeight: "bold",
-              fontSize: "12px"
-            }}
-          >
-            {isDrawingMode ? "Drawing Active (Drag Box on Map)" : "🎯 Draw Area on Map"}
-          </button>
-          <span style={{ fontSize: "12px", color: "#777" }}>Presets:</span>
-          {PRESET_REGIONS.map((p, idx) => (
+        {/* Controls: Draw Mode, Basemap Switcher, Presets */}
+        <div style={{ display: "flex", gap: "6px", alignItems: "center", marginBottom: "8px", flexWrap: "wrap", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}>
             <button
-              key={idx}
-              onClick={() => setPreset(p.bbox)}
-              style={{ padding: "4px 8px", fontSize: "11px", borderRadius: "12px", border: "1px solid #ccc", background: "#f8f8f8", cursor: "pointer" }}
+              onClick={() => setIsDrawingMode(!isDrawingMode)}
+              style={{
+                padding: "6px 12px",
+                backgroundColor: isDrawingMode ? "#d9534f" : "#0275d8",
+                color: "#fff",
+                border: "none",
+                borderRadius: "4px",
+                cursor: "pointer",
+                fontWeight: "bold",
+                fontSize: "12px",
+                display: "flex",
+                alignItems: "center",
+                gap: "5px"
+              }}
             >
-              {p.name}
+              <span>{isDrawingMode ? "🔴" : "🎯"}</span>
+              <span>{isDrawingMode ? "Drawing Active (Drag Box)" : "Draw Area on Map"}</span>
             </button>
-          ))}
+
+            {/* Basemap Switcher */}
+            <div style={{ display: "flex", borderRadius: "6px", overflow: "hidden", border: "1px solid #cbd5e1" }}>
+              <button
+                onClick={() => switchBaseMap("satellite")}
+                style={{
+                  padding: "5px 9px",
+                  fontSize: "11px",
+                  background: baseMapMode === "satellite" ? "#0f172a" : "#fff",
+                  color: baseMapMode === "satellite" ? "#fff" : "#334155",
+                  border: "none",
+                  cursor: "pointer",
+                  fontWeight: baseMapMode === "satellite" ? "700" : "500"
+                }}
+              >
+                🛰️ Satellite
+              </button>
+              <button
+                onClick={() => switchBaseMap("hybrid")}
+                style={{
+                  padding: "5px 9px",
+                  fontSize: "11px",
+                  background: baseMapMode === "hybrid" ? "#0f172a" : "#fff",
+                  color: baseMapMode === "hybrid" ? "#fff" : "#334155",
+                  border: "none",
+                  borderLeft: "1px solid #cbd5e1",
+                  cursor: "pointer",
+                  fontWeight: baseMapMode === "hybrid" ? "700" : "500"
+                }}
+              >
+                🏷️ Hybrid
+              </button>
+              <button
+                onClick={() => switchBaseMap("streets")}
+                style={{
+                  padding: "5px 9px",
+                  fontSize: "11px",
+                  background: baseMapMode === "streets" ? "#0f172a" : "#fff",
+                  color: baseMapMode === "streets" ? "#fff" : "#334155",
+                  border: "none",
+                  borderLeft: "1px solid #cbd5e1",
+                  cursor: "pointer",
+                  fontWeight: baseMapMode === "streets" ? "700" : "500"
+                }}
+              >
+                🗺️ Streets
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: "4px", alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontSize: "11px", color: "#64748b", fontWeight: "600" }}>Presets:</span>
+            {PRESET_REGIONS.map((p, idx) => (
+              <button
+                key={idx}
+                onClick={() => setPreset(p.bbox)}
+                style={{ padding: "4px 7px", fontSize: "10px", borderRadius: "10px", border: "1px solid #cbd5e1", background: "#f8fafc", cursor: "pointer", color: "#334155" }}
+              >
+                {p.name.split("/")[0].trim()}
+              </button>
+            ))}
+          </div>
         </div>
 
-        <div style={{ display: "flex", gap: "10px", alignItems: "center", marginBottom: "8px", fontSize: "13px" }}>
-          <label>Min Lon: <input type="number" step="0.01" value={minLon} onChange={(e) => setMinLon(parseFloat(e.target.value))} style={{ width: "65px" }} /></label>
-          <label>Min Lat: <input type="number" step="0.01" value={minLat} onChange={(e) => setMinLat(parseFloat(e.target.value))} style={{ width: "65px" }} /></label>
-          <label>Max Lon: <input type="number" step="0.01" value={maxLon} onChange={(e) => setMaxLon(parseFloat(e.target.value))} style={{ width: "65px" }} /></label>
-          <label>Max Lat: <input type="number" step="0.01" value={maxLat} onChange={(e) => setMaxLat(parseFloat(e.target.value))} style={{ width: "65px" }} /></label>
+        {/* Coordinate Inputs */}
+        <div style={{ display: "flex", gap: "10px", alignItems: "center", marginBottom: "8px", fontSize: "12px", background: "#f1f5f9", padding: "6px 10px", borderRadius: "6px" }}>
+          <label>Min Lon: <input type="number" step="0.01" value={minLon} onChange={(e) => setMinLon(parseFloat(e.target.value))} style={{ width: "65px", padding: "2px 4px" }} /></label>
+          <label>Min Lat: <input type="number" step="0.01" value={minLat} onChange={(e) => setMinLat(parseFloat(e.target.value))} style={{ width: "65px", padding: "2px 4px" }} /></label>
+          <label>Max Lon: <input type="number" step="0.01" value={maxLon} onChange={(e) => setMaxLon(parseFloat(e.target.value))} style={{ width: "65px", padding: "2px 4px" }} /></label>
+          <label>Max Lat: <input type="number" step="0.01" value={maxLat} onChange={(e) => setMaxLat(parseFloat(e.target.value))} style={{ width: "65px", padding: "2px 4px" }} /></label>
+          <span style={{ marginLeft: "auto", fontSize: "11px", color: "#d97706", fontWeight: "600" }}>
+            ✨ Drag handles on map to resize freely
+          </span>
         </div>
 
-        <div id="map" ref={mapRef} style={{ flex: 1, minHeight: "340px", border: "1px solid #aaa", borderRadius: "4px", cursor: isDrawingMode ? "crosshair" : "default" }} />
+        {/* Leaflet Map with Satellite Basemap & Draggable Handles */}
+        <div id="map" ref={mapRef} style={{ flex: 1, minHeight: "340px", border: "1px solid #334155", borderRadius: "6px", cursor: isDrawingMode ? "crosshair" : "default" }} />
 
+        {/* Telemetry and Footprints action bar */}
         <div style={{ marginTop: "8px", display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
-          <button onClick={handleFetchTelemetry} disabled={isFetchingTelemetry} style={{ padding: "6px 12px", cursor: "pointer" }}>
+          <button onClick={handleFetchTelemetry} disabled={isFetchingTelemetry} style={{ padding: "6px 12px", cursor: "pointer", fontSize: "12px" }}>
             {isFetchingTelemetry ? "Fetching Footprints..." : "Fetch Footprints Overlay"}
           </button>
           {activeGeoJSON && (
-            <button onClick={handleDownloadGeoJSON} style={{ padding: "6px 12px", cursor: "pointer", background: "#28a745", color: "#fff", border: "none", borderRadius: "4px" }}>
+            <button onClick={handleDownloadGeoJSON} style={{ padding: "6px 12px", cursor: "pointer", background: "#28a745", color: "#fff", border: "none", borderRadius: "4px", fontSize: "12px" }}>
               Export ISRO Bhuvan GeoJSON
             </button>
           )}
