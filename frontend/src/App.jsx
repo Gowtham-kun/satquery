@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useRef } from "react";
 import L from "leaflet";
-import { checkWebGPUCompatibility, generateOnClientGPU } from "./services/webgpu.js";
+import { checkWebGPUCompatibility, runVlmInference } from "./services/webgpu.js";
+import { fetchAndRenderOptical, fetchAndRenderSAR } from "./services/cogReader.js";
+import { analyzeOpticalCanvas, analyzeSarCanvas } from "./services/vlmVisionEngine.js";
 import GpuLockScreen from "./components/GpuLockScreen.jsx";
+import ImageryPanel from "./components/ImageryPanel.jsx";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
 
@@ -24,6 +27,15 @@ export default function App() {
   const [modelLoadingStatus, setModelLoadingStatus] = useState("");
   const [selectedLocation, setSelectedLocation] = useState(null);
   const [isResolvingLocation, setIsResolvingLocation] = useState(false);
+
+  const [opticalScene, setOpticalScene] = useState(null);
+  const [sarScene, setSarScene] = useState(null);
+  const [opticalCanvas, setOpticalCanvas] = useState(null);
+  const [sarCanvas, setSarCanvas] = useState(null);
+  const [opticalAnalysis, setOpticalAnalysis] = useState(null);
+  const [sarAnalysis, setSarAnalysis] = useState(null);
+  const [isLoadingImagery, setIsLoadingImagery] = useState(false);
+  const [imageryError, setImageryError] = useState("");
 
   const [messages, setMessages] = useState([
     {
@@ -64,6 +76,50 @@ export default function App() {
     isDrawingModeRef.current = isDrawingMode;
   }, [isDrawingMode]);
 
+  const loadImageryForCurrentBbox = async () => {
+    setIsLoadingImagery(true);
+    setImageryError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/imagery/search`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bbox: [minLon, minLat, maxLon, maxLat] })
+      });
+      if (!res.ok) throw new Error(`Imagery search failed (HTTP ${res.status})`);
+      const data = await res.json();
+      setOpticalScene(data.optical);
+      setSarScene(data.sar);
+
+      const bboxArr = [minLon, minLat, maxLon, maxLat];
+
+      if (data.optical?.asset_urls) {
+        try {
+          const optResult = await fetchAndRenderOptical(data.optical.asset_urls, bboxArr, 512, API_BASE);
+          setOpticalCanvas(optResult.canvas);
+          const optMetrics = analyzeOpticalCanvas(optResult.canvas);
+          setOpticalAnalysis(optMetrics);
+        } catch (e) {
+          console.warn("Optical rendering note:", e);
+        }
+      }
+
+      if (data.sar?.asset_urls) {
+        try {
+          const sarResult = await fetchAndRenderSAR(data.sar.asset_urls, bboxArr, 512, API_BASE);
+          setSarCanvas(sarResult.canvas);
+          const sarMetrics = analyzeSarCanvas(sarResult.canvas);
+          setSarAnalysis(sarMetrics);
+        } catch (e) {
+          console.warn("SAR rendering note:", e);
+        }
+      }
+    } catch (err) {
+      setImageryError(err.message || "Failed to load satellite imagery passes");
+    } finally {
+      setIsLoadingImagery(false);
+    }
+  };
+
   useEffect(() => {
     setIsResolvingLocation(true);
     const timer = setTimeout(async () => {
@@ -77,9 +133,10 @@ export default function App() {
           const info = await res.json();
           setSelectedLocation(info);
           setIsResolvingLocation(false);
+          loadImageryForCurrentBbox();
           return;
         }
-      } catch (err) {}
+      } catch (_) {}
 
       try {
         const cLat = ((minLat + maxLat) / 2).toFixed(4);
@@ -105,6 +162,7 @@ export default function App() {
         }
       } catch (_) {}
       setIsResolvingLocation(false);
+      loadImageryForCurrentBbox();
     }, 450);
     return () => clearTimeout(timer);
   }, [minLon, minLat, maxLon, maxLat]);
@@ -215,61 +273,24 @@ export default function App() {
     setIsSending(true);
 
     try {
-      setModelLoadingStatus("Resolving satellite fusion & geospatial context...");
-      const res = await fetch(`${API_BASE}/api/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query,
-          bbox: [minLon, minLat, maxLon, maxLat],
-          chat_history: newHistory.map((m) => ({ role: m.role, content: m.content }))
-        })
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        if (data.geo_context) {
-          setSelectedLocation(data.geo_context);
-        }
-        setMessages([...newHistory, { role: "assistant", content: data.reply, webgpu: true }]);
-        return;
-      }
-
-      if (selectedLocation) {
-        setModelLoadingStatus("Executing on client WebGPU shaders...");
-        const city = selectedLocation.city || "Selected Location";
-        const state = selectedLocation.state || "";
-        const country = selectedLocation.country || "India";
-        const isCoastal = selectedLocation.is_coastal;
-        const marineRule = isCoastal
-          ? `Yes, ${city} directly borders the ${selectedLocation.coastal_sea}.`
-          : `No, ${city} is an inland city and does NOT have any oceans or seas. It is located ${selectedLocation.coastal_summary}.`;
-
-        const sysPrompt = `You are SatQuery AI (SIH Problem Statement 167), an AI satellite vision-language assistant fusing Sentinel-1 SAR radar and Sentinel-2 Optical imagery.
-Location Ground Truth:
-- Administrative: ${city}, ${state}, ${country}.
-- Coastal Status: ${selectedLocation.coastal_summary}.
-- Local Water Bodies: ${selectedLocation.nearby_water_bodies?.join(", ")}.
-- Elevation: ~${selectedLocation.elevation_meters}m.
-Directives:
-1. When asked what city or location was selected, explicitly state: You have selected ${city}, ${state}, ${country}.
-2. When asked if there are oceans, state: ${marineRule}
-3. Synthesize optical reflectance and SAR radio wave radar observations naturally.`;
-
-        const clientAnswer = await generateOnClientGPU(sysPrompt, query, (p) => {
+      setModelLoadingStatus("Executing multi-sensor VLM inference on client WebGPU...");
+      const result = await runVlmInference({
+        geoContext: selectedLocation,
+        opticalAnalysis,
+        sarAnalysis,
+        opticalScene,
+        sarScene,
+        bbox: [minLon, minLat, maxLon, maxLat],
+        userQuery: query,
+        onProgress: (p) => {
           if (p?.status === "progress" && p.total) {
             const pct = Math.round((p.loaded / p.total) * 100);
             setModelLoadingStatus(`Loading WebGPU weights: ${pct}%`);
           }
-        });
-
-        if (clientAnswer && clientAnswer.length > 10) {
-          setMessages([...newHistory, { role: "assistant", content: clientAnswer, webgpu: true }]);
-          return;
         }
-      }
+      });
 
-      throw new Error(`Chat service returned ${res.status}`);
+      setMessages([...newHistory, { role: "assistant", content: result.text, webgpu: true }]);
     } catch (err) {
       setMessages([
         ...newHistory,
@@ -333,7 +354,7 @@ Directives:
       a.click();
       a.remove();
       window.URL.revokeObjectURL(url);
-    } catch (err) {}
+    } catch (_) {}
   };
 
   if (gpuState.checking) {
@@ -366,10 +387,11 @@ Directives:
 
   return (
     <div style={{ display: "flex", height: "100vh", width: "100vw", overflow: "hidden", fontFamily: "sans-serif" }}>
-      <div style={{ flex: "0 0 60%", display: "flex", flexDirection: "column", borderRight: "2px solid #e2e8f0", padding: "12px", boxSizing: "border-box", background: "#f8fafc" }}>
+      {/* Left Map & Area Selection Pane (60%) */}
+      <div style={{ flex: "0 0 58%", display: "flex", flexDirection: "column", borderRight: "2px solid #e2e8f0", padding: "12px", boxSizing: "border-box", background: "#f8fafc" }}>
         <header style={{ marginBottom: "6px", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div>
-            <h2 style={{ margin: "0 0 2px 0", color: "#0f172a", fontSize: "18px" }}>SatQuery AI: Optical & SAR Fusion (SIH 167)</h2>
+            <h2 style={{ margin: "0 0 2px 0", color: "#0f172a", fontSize: "18px" }}>SatQuery AI: Optical & SAR VLM Fusion (SIH 167)</h2>
             <span style={{ fontSize: "12px", color: "#64748b" }}>
               Click anywhere on the map to center the area, toggle <strong>Draw Mode</strong> to drag a new box, or use presets.
             </span>
@@ -457,11 +479,11 @@ Directives:
           <label>Max Lat: <input type="number" step="0.01" value={maxLat} onChange={(e) => setMaxLat(parseFloat(e.target.value))} style={{ width: "65px" }} /></label>
         </div>
 
-        <div id="map" ref={mapRef} style={{ flex: 1, minHeight: "360px", border: "1px solid #aaa", borderRadius: "4px", cursor: isDrawingMode ? "crosshair" : "default" }} />
+        <div id="map" ref={mapRef} style={{ flex: 1, minHeight: "340px", border: "1px solid #aaa", borderRadius: "4px", cursor: isDrawingMode ? "crosshair" : "default" }} />
 
         <div style={{ marginTop: "8px", display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
           <button onClick={handleFetchTelemetry} disabled={isFetchingTelemetry} style={{ padding: "6px 12px", cursor: "pointer" }}>
-            {isFetchingTelemetry ? "Fetching Telemetry..." : "Fetch Satellite Footprints"}
+            {isFetchingTelemetry ? "Fetching Footprints..." : "Fetch Footprints Overlay"}
           </button>
           {activeGeoJSON && (
             <button onClick={handleDownloadGeoJSON} style={{ padding: "6px 12px", cursor: "pointer", background: "#28a745", color: "#fff", border: "none", borderRadius: "4px" }}>
@@ -472,12 +494,14 @@ Directives:
         </div>
       </div>
 
-      <div style={{ flex: "0 0 40%", display: "flex", flexDirection: "column", background: "#fdfdfd", boxSizing: "border-box" }}>
-        <div style={{ padding: "12px 16px", borderBottom: "1px solid #eee", background: "#fafafa", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      {/* Right VLM Imagery & Multi-Sensor Chat Pane (42%) */}
+      <div style={{ flex: "0 0 42%", display: "flex", flexDirection: "column", background: "#fdfdfd", boxSizing: "border-box" }}>
+        {/* Header */}
+        <div style={{ padding: "10px 16px", borderBottom: "1px solid #eee", background: "#fafafa", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
-            <h3 style={{ margin: "0 0 2px 0", fontSize: "16px" }}>Vision-Language Geospatial Assistant</h3>
-            <span style={{ fontSize: "11px", color: "#666" }}>
-              Selected: <strong>{selectedLocation?.city || "Active Bounding Box"}</strong> ({minLon.toFixed(2)}E, {minLat.toFixed(2)}N)
+            <h3 style={{ margin: "0 0 2px 0", fontSize: "15px", color: "#0f172a" }}>Vision-Language Geospatial VLM</h3>
+            <span style={{ fontSize: "11px", color: "#64748b" }}>
+              Active Area: <strong>{selectedLocation?.city || "Selected Bounding Box"}</strong> ({minLon.toFixed(2)}E, {minLat.toFixed(2)}N)
             </span>
           </div>
           <span style={{
@@ -489,16 +513,31 @@ Directives:
             fontWeight: "600",
             border: "1px solid #bfdbfe"
           }}>
-            ⚡ GPU Accelerated
+            ⚡ Client GPU Accelerated
           </span>
         </div>
 
-        <div style={{ padding: "8px 16px", background: "#f4f6f8", borderBottom: "1px solid #e5e5e5", display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
-          <span style={{ fontSize: "11px", color: "#555", fontWeight: "bold" }}>Try asking:</span>
+        {/* Real Satellite Imagery Panel */}
+        <ImageryPanel
+          opticalCanvas={opticalCanvas}
+          sarCanvas={sarCanvas}
+          opticalScene={opticalScene}
+          sarScene={sarScene}
+          opticalAnalysis={opticalAnalysis}
+          sarAnalysis={sarAnalysis}
+          isLoadingImagery={isLoadingImagery}
+          imageryError={imageryError}
+          onRefresh={loadImageryForCurrentBbox}
+        />
+
+        {/* Context-Aware Quick Prompt Chips */}
+        <div style={{ padding: "6px 14px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0", display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontSize: "11px", color: "#64748b", fontWeight: "bold" }}>Try asking:</span>
           {[
             "Which city did I select?",
             "Are there any oceans in this city?",
-            "What is the terrain and vegetation like here?",
+            "What does the optical imagery show?",
+            "What does the SAR radar show?",
             "Are there flood risks detected?"
           ].map((sample, i) => (
             <button
@@ -509,10 +548,10 @@ Directives:
                 fontSize: "10px",
                 padding: "3px 8px",
                 background: "#fff",
-                border: "1px solid #ccc",
+                border: "1px solid #cbd5e1",
                 borderRadius: "10px",
-                cursor: "pointer",
-                color: "#0066cc"
+                cursor: isSending ? "not-allowed" : "pointer",
+                color: "#0369a1"
               }}
             >
               {sample}
@@ -520,13 +559,14 @@ Directives:
           ))}
         </div>
 
-        <div ref={chatScrollRef} style={{ flex: 1, padding: "16px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "12px" }}>
+        {/* Chat History */}
+        <div ref={chatScrollRef} style={{ flex: 1, padding: "14px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "10px" }}>
           {messages.map((m, idx) => (
             <div
               key={idx}
               style={{
                 alignSelf: m.role === "user" ? "flex-end" : "flex-start",
-                maxWidth: "85%",
+                maxWidth: "88%",
                 padding: "10px 14px",
                 borderRadius: "12px",
                 fontSize: "13px",
@@ -539,8 +579,9 @@ Directives:
             >
               {m.content}
               {m.webgpu && (
-                <div style={{ marginTop: "6px", fontSize: "10px", color: "#059669", fontWeight: "600" }}>
-                  ⚡ Processed with Multi-Sensor SAR & Optical Vision-Language Grounding
+                <div style={{ marginTop: "6px", fontSize: "10px", color: "#059669", fontWeight: "600", display: "flex", alignItems: "center", gap: "4px" }}>
+                  <span>⚡</span>
+                  <span>Processed on Local GPU with Optical & SAR Vision Grounding</span>
                 </div>
               )}
             </div>
@@ -557,10 +598,11 @@ Directives:
           )}
         </div>
 
-        <div style={{ padding: "12px 16px", borderTop: "1px solid #eee", background: "#fafafa", display: "flex", gap: "8px" }}>
+        {/* Chat Input */}
+        <div style={{ padding: "12px 14px", borderTop: "1px solid #eee", background: "#fafafa", display: "flex", gap: "8px" }}>
           <input
             type="text"
-            placeholder="Ask about nearby water bodies, cities, terrain, or flood risks..."
+            placeholder={`Ask about ${selectedLocation?.city || "this region"}'s satellite imagery, water bodies, or flood risks...`}
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={(e) => {

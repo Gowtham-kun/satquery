@@ -1,10 +1,11 @@
 from typing import Any, Dict, List
 import io
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from backend.services.satellite import fetch_satellite_metadata
+from backend.services.imagery_provider import ImagerySearchRequest, search_imagery, proxy_cog_bytes
 from backend.services.geojson_pipeline import (
     BoundingBox,
     fuse_satellite_records,
@@ -93,6 +94,22 @@ async def chat_conversational(req: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=400, detail="Chat query cannot be empty")
     reply, geo_context = await process_chat_message(req.query, req.bbox, req.chat_history)
     return ChatResponse(reply=reply, geo_context=geo_context)
+
+@app.post("/api/imagery/search")
+async def imagery_search(req: ImagerySearchRequest) -> Dict[str, Any]:
+    try:
+        return await search_imagery(req.bbox, req.start_date, req.end_date)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+@app.get("/api/imagery/proxy")
+async def imagery_proxy(url: str, request: Request):
+    try:
+        range_header = request.headers.get("Range")
+        data, status_code, headers = await proxy_cog_bytes(url, range_header)
+        return Response(content=data, status_code=status_code, headers=headers)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 if __name__ == "__main__":
     import uvicorn

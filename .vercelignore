@@ -1,4 +1,4 @@
-backend/
 scraper/
 tests/
-requirements.txt
+.pytest_cache/
+.agent/

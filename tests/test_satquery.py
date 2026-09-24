@@ -9,7 +9,7 @@ from backend.services.geojson_pipeline import (
 )
 from backend.services.rag_service import EphemeralGeoIndex, build_corpus_from_geojson, execute_geospatial_rag
 from backend.services.geo_resolver import resolve_geographic_context
-from backend.services.vlm_engine import generate_visual_context
+from backend.services.imagery_provider import search_imagery, proxy_cog_bytes
 
 def test_pydantic_models():
     bbox = BoundingBox(min_lon=80.0, min_lat=15.0, max_lon=81.0, max_lat=16.0)
@@ -136,4 +136,22 @@ def test_conversational_chat():
                 assert "{" not in reply and "}" not in reply
                 history.append({"role": "user", "content": q})
                 history.append({"role": "assistant", "content": reply})
+    asyncio.run(_run())
+
+def test_imagery_search_and_proxy():
+    async def _run():
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            bbox = [78.3, 17.3, 78.6, 17.5]
+            res = await client.post("/api/imagery/search", json={"bbox": bbox}, timeout=35.0)
+            assert res.status_code == 200
+            data = res.json()
+            assert data["status"] == "success"
+            assert "optical" in data
+            assert "sar" in data
+            if data.get("optical") and data["optical"].get("asset_urls", {}).get("B04"):
+                b04_url = data["optical"]["asset_urls"]["B04"]
+                proxy_res = await client.get("/api/imagery/proxy", params={"url": b04_url}, headers={"Range": "bytes=0-255"}, timeout=30.0)
+                assert proxy_res.status_code in (200, 206)
+                assert len(proxy_res.content) > 0
     asyncio.run(_run())
