@@ -9,12 +9,13 @@ import ImageryPanel from "./components/ImageryPanel.jsx";
 const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
 
 const PRESET_REGIONS = [
-  { name: "Godavari Delta / Bay of Bengal", bbox: [81.5, 16.3, 82.5, 17.3] },
-  { name: "Hyderabad / Deccan Plateau", bbox: [78.3, 17.3, 78.6, 17.5] },
-  { name: "Mumbai Coast / Arabian Sea", bbox: [72.7, 18.8, 73.2, 19.3] },
-  { name: "Sundarbans Delta / Kolkata", bbox: [88.2, 21.8, 89.2, 22.6] },
-  { name: "Kaveri Basin / Tamil Nadu", bbox: [79.2, 10.7, 79.9, 11.4] },
-  { name: "Brahmaputra / Assam Plains", bbox: [91.5, 26.0, 92.5, 26.8] }
+  { name: "Hyderabad", fullName: "Hyderabad / Deccan Plateau", bbox: [78.3, 17.3, 78.6, 17.5] },
+  { name: "Bengaluru", fullName: "Bengaluru / Karnataka", bbox: [77.5, 12.8, 77.8, 13.1] },
+  { name: "Mumbai", fullName: "Mumbai Coast / Arabian Sea", bbox: [72.7, 18.8, 73.2, 19.3] },
+  { name: "Godavari", fullName: "Godavari Delta / Bay of Bengal", bbox: [81.5, 16.3, 82.5, 17.3] },
+  { name: "Sundarbans", fullName: "Sundarbans Delta / Kolkata", bbox: [88.2, 21.8, 89.2, 22.6] },
+  { name: "Kaveri", fullName: "Kaveri Basin / Tamil Nadu", bbox: [79.2, 10.7, 79.9, 11.4] },
+  { name: "Brahmaputra", fullName: "Brahmaputra / Assam Plains", bbox: [91.5, 26.0, 92.5, 26.8] }
 ];
 
 export default function App() {
@@ -25,6 +26,7 @@ export default function App() {
   const [maxLat, setMaxLat] = useState(17.5);
   const [isDrawingMode, setIsDrawingMode] = useState(false);
   const [baseMapMode, setBaseMapMode] = useState("satellite");
+  const [activeTab, setActiveTab] = useState("canvas");
   const [modelLoadingStatus, setModelLoadingStatus] = useState("");
   const [selectedLocation, setSelectedLocation] = useState(null);
   const [isResolvingLocation, setIsResolvingLocation] = useState(false);
@@ -41,7 +43,7 @@ export default function App() {
   const [messages, setMessages] = useState([
     {
       role: "assistant",
-      content: "Welcome to SatQuery AI (SIH Problem Statement 167). I combine Optical sensors (Sentinel-2) and Radio Wave SAR sensors (Sentinel-1) with Vision-Language geospatial intelligence. Drag any corner handle or the center ✥ icon to resize or move your area, toggle Draw Mode to sketch a new bounding box, or click presets!"
+      content: "Observation pipeline initialized. Dual-sensor Sentinel-2 (Optical) and Sentinel-1 (C-Band SAR) fusion active. Drag corner handles or the center ✥ icon on the Spatial Canvas to adjust your Region of Interest (ROI), or select a preset region to begin visual geospatial queries."
     }
   ]);
   const [inputText, setInputText] = useState("");
@@ -225,7 +227,8 @@ export default function App() {
 
   useEffect(() => {
     if (!gpuState.compatible || !mapRef.current || mapInstanceRef.current) return;
-    const map = L.map(mapRef.current).setView([(minLat + maxLat) / 2, (minLon + maxLon) / 2], 9);
+    const map = L.map(mapRef.current, { zoomControl: false }).setView([(minLat + maxLat) / 2, (minLon + maxLon) / 2], 9);
+    L.control.zoom({ position: "topright" }).addTo(map);
 
     const satTile = L.tileLayer(
       "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
@@ -235,10 +238,10 @@ export default function App() {
 
     const bounds = [[minLat, minLon], [maxLat, maxLon]];
     const rect = L.rectangle(bounds, {
-      color: "#ff6600",
-      weight: 2.5,
-      fillColor: "#ff6600",
-      fillOpacity: 0.18,
+      color: "#00e5ff",
+      weight: 1.8,
+      fillColor: "#00e5ff",
+      fillOpacity: 0.12,
       dashArray: "4, 4"
     }).addTo(map);
     rectLayerRef.current = rect;
@@ -248,10 +251,10 @@ export default function App() {
       html: `<div style="
         width: 14px;
         height: 14px;
-        background: #ffffff;
-        border: 3px solid #ff6600;
+        background: #00e5ff;
+        border: 2px solid #ffffff;
         border-radius: 50%;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.7);
+        box-shadow: 0 0 8px rgba(0, 229, 255, 0.7);
         cursor: ${cursor};
       "></div>`,
       iconSize: [14, 14],
@@ -263,16 +266,16 @@ export default function App() {
       html: `<div style="
         width: 26px;
         height: 26px;
-        background: rgba(255, 102, 0, 0.95);
-        border: 2px solid #ffffff;
+        background: rgba(12, 12, 14, 0.9);
+        border: 2px solid #00e5ff;
         border-radius: 50%;
-        color: #ffffff;
+        color: #00e5ff;
         display: flex;
         align-items: center;
         justify-content: center;
         font-size: 13px;
         font-weight: bold;
-        box-shadow: 0 3px 10px rgba(0,0,0,0.8);
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.8);
         cursor: grab;
       ">✥</div>`,
       iconSize: [26, 26],
@@ -285,11 +288,11 @@ export default function App() {
     const se = L.marker([minLat, maxLon], { draggable: true, icon: createCornerIcon("nwse-resize"), zIndexOffset: 1000 }).addTo(map);
     const center = L.marker([(minLat + maxLat) / 2, (minLon + maxLon) / 2], { draggable: true, icon: createCenterIcon(), zIndexOffset: 999 }).addTo(map);
 
-    nw.bindTooltip("Drag NW Corner to resize", { permanent: false, direction: "top" });
-    ne.bindTooltip("Drag NE Corner to resize", { permanent: false, direction: "top" });
-    sw.bindTooltip("Drag SW Corner to resize", { permanent: false, direction: "bottom" });
-    se.bindTooltip("Drag SE Corner to resize", { permanent: false, direction: "bottom" });
-    center.bindTooltip("Drag ✥ to move selection", { permanent: false, direction: "top" });
+    nw.bindTooltip("Drag to resize NW", { permanent: false, direction: "top" });
+    ne.bindTooltip("Drag to resize NE", { permanent: false, direction: "top" });
+    sw.bindTooltip("Drag to resize SW", { permanent: false, direction: "bottom" });
+    se.bindTooltip("Drag to resize SE", { permanent: false, direction: "bottom" });
+    center.bindTooltip("Drag ✥ to reposition area", { permanent: false, direction: "top" });
 
     nw.on("drag", (e) => {
       const lat = e.latlng.lat;
@@ -474,14 +477,14 @@ export default function App() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setActiveGeoJSON(data.geojson);
-      setTelemetrySummary(`Loaded ${data.sar_count} Sentinel-1 SAR & ${data.optical_count} Sentinel-2 Optical passes (${data.fused_count} fused layers).`);
+      setTelemetrySummary(`Loaded ${data.sar_count} Sentinel-1 SAR & ${data.optical_count} Sentinel-2 passes.`);
       if (mapInstanceRef.current && data.geojson) {
         if (geojsonLayerRef.current) {
           mapInstanceRef.current.removeLayer(geojsonLayerRef.current);
         }
         geojsonLayerRef.current = L.geoJSON(data.geojson, {
           style: (f) => ({
-            color: f.properties?.sar_all_weather_validity ? "#00e5ff" : "#00e676",
+            color: f.properties?.sar_all_weather_validity ? "#00e5ff" : "#10b981",
             weight: 2,
             fillOpacity: 0.15
           })
@@ -519,20 +522,20 @@ export default function App() {
       <div style={{
         height: "100vh",
         width: "100vw",
-        background: "#0a0d14",
-        color: "#94a3b8",
+        background: "#09090b",
+        color: "#a1a1aa",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        fontFamily: "system-ui, sans-serif"
+        fontFamily: "'Inter', sans-serif"
       }}>
-        <div style={{ fontSize: "32px", marginBottom: "16px" }}>⚡</div>
-        <div style={{ fontSize: "16px", fontWeight: "600", color: "#38bdf8", marginBottom: "8px" }}>
-          Scanning WebGPU Hardware Acceleration...
+        <div style={{ fontSize: "28px", marginBottom: "14px" }}>⚡</div>
+        <div style={{ fontSize: "15px", fontWeight: "600", color: "#fafafa", marginBottom: "6px" }}>
+          Scanning WebGPU Hardware Compute...
         </div>
-        <div style={{ fontSize: "12px", color: "#64748b" }}>
-          Verifying physical GPU adapter and compute context
+        <div style={{ fontSize: "12px", color: "#71717a", fontFamily: "'JetBrains Mono', monospace" }}>
+          Allocating high-performance discrete GPU context
         </div>
       </div>
     );
@@ -542,333 +545,599 @@ export default function App() {
     return <GpuLockScreen reason={gpuState.reason} onRetry={verifyGpu} />;
   }
 
-  return (
-    <div style={{ display: "flex", height: "100vh", width: "100vw", overflow: "hidden", fontFamily: "sans-serif" }}>
-      {/* Left Map & Area Selection Pane (58%) */}
-      <div style={{ flex: "0 0 58%", display: "flex", flexDirection: "column", borderRight: "2px solid #e2e8f0", padding: "12px", boxSizing: "border-box", background: "#f8fafc" }}>
-        <header style={{ marginBottom: "6px", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <div>
-            <h2 style={{ margin: "0 0 2px 0", color: "#0f172a", fontSize: "18px" }}>SatQuery AI: Optical & SAR VLM Fusion (SIH 167)</h2>
-            <span style={{ fontSize: "12px", color: "#64748b" }}>
-              Drag <strong>corner handles</strong> to resize freely, drag <strong>center ✥</strong> to move, or toggle <strong>Draw Mode</strong>.
-            </span>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "3px" }}>
-            <div style={{
-              background: (gpuState.info?.vendor?.toLowerCase().includes("intel") || gpuState.info?.description?.toLowerCase().includes("intel"))
-                ? "linear-gradient(135deg, #d97706 0%, #b45309 100%)"
-                : "linear-gradient(135deg, #059669 0%, #047857 100%)",
-              color: "#fff",
-              padding: "4px 10px",
-              borderRadius: "14px",
-              fontSize: "11px",
-              fontWeight: "600",
-              display: "flex",
-              alignItems: "center",
-              gap: "5px",
-              boxShadow: "0 2px 6px rgba(0,0,0,0.15)"
-            }}>
-              <span>{(gpuState.info?.vendor?.toLowerCase().includes("intel") || gpuState.info?.description?.toLowerCase().includes("intel")) ? "🟡" : "🟢"}</span>
-              <span>WebGPU: {gpuState.info?.vendor} {gpuState.info?.architecture || gpuState.info?.device}</span>
-            </div>
-            {(gpuState.info?.vendor?.toLowerCase().includes("intel") || gpuState.info?.description?.toLowerCase().includes("intel")) && (
-              <span style={{ fontSize: "10px", color: "#b45309", fontWeight: "600" }}>
-                Dedicated RTX 4050 configured! Restart browser window to apply.
-              </span>
-            )}
-          </div>
-        </header>
+  const isIntel = gpuState.info?.vendor?.toLowerCase().includes("intel") || gpuState.info?.description?.toLowerCase().includes("intel");
 
-        {/* Selected location ground truth banner */}
-        <div style={{
-          background: selectedLocation ? "#f0fdf4" : "#f8fafc",
-          border: selectedLocation ? "1px solid #bbf7d0" : "1px solid #e2e8f0",
-          borderRadius: "8px",
-          padding: "8px 12px",
-          marginBottom: "8px",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          fontSize: "12px"
-        }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <span style={{ fontSize: "14px" }}>📍</span>
-            {isResolvingLocation ? (
-              <span style={{ color: "#0284c7" }}>Resolving location ground truth...</span>
-            ) : selectedLocation ? (
-              <span style={{ color: "#166534", fontWeight: "600" }}>
-                {selectedLocation.city}, {selectedLocation.state} ({selectedLocation.country})
-                <span style={{ fontWeight: "normal", color: "#4b5563", marginLeft: "6px" }}>
-                  | Elev: ~{Math.round(selectedLocation.elevation_meters || 0)}m | {selectedLocation.is_coastal ? `Coastal (${selectedLocation.coastal_sea})` : "Inland Plateau (No Ocean)"}
-                </span>
-              </span>
-            ) : (
-              <span style={{ color: "#64748b" }}>Selecting region...</span>
-            )}
-          </div>
-          <span style={{ fontSize: "11px", color: "#0369a1", fontWeight: "600", background: "#e0f2fe", padding: "2px 8px", borderRadius: "6px" }}>
-            [{minLon.toFixed(2)}, {minLat.toFixed(2)}] to [{maxLon.toFixed(2)}, {maxLat.toFixed(2)}]
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100vh", width: "100vw", background: "#09090b", overflow: "hidden", color: "#fafafa" }}>
+      {/* Top Header - Spatial Minimalism */}
+      <header className="anim-header" style={{
+        height: "56px",
+        width: "100%",
+        padding: "0 20px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        borderBottom: "1px solid #27272a",
+        background: "#0c0c0e",
+        zIndex: 50,
+        flexShrink: 0
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#10b981", boxShadow: "0 0 8px rgba(16, 185, 129, 0.7)" }} />
+          <span style={{ fontWeight: "600", letterSpacing: "-0.02em", fontSize: "15px", color: "#ffffff" }}>SatQuery AI</span>
+          <span style={{ fontSize: "11px", color: "#71717a", fontFamily: "'JetBrains Mono', monospace", marginLeft: "4px" }}>
+            Earth Observation · SIH 167
           </span>
         </div>
 
-        {/* Controls: Draw Mode, Basemap Switcher, Presets */}
-        <div style={{ display: "flex", gap: "6px", alignItems: "center", marginBottom: "8px", flexWrap: "wrap", justifyContent: "space-between" }}>
-          <div style={{ display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}>
+        {/* Center Live Pipeline Indicator */}
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "6px",
+          padding: "4px 12px",
+          borderRadius: "9999px",
+          background: "#141416",
+          border: "1px solid #27272a",
+          fontSize: "11px",
+          color: "#a1a1aa",
+          fontFamily: "'JetBrains Mono', monospace"
+        }}>
+          <span className="beacon-dot" style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#10b981", display: "inline-block" }} />
+          <span>Live Sensor Pipeline Active</span>
+        </div>
+
+        {/* Right GPU Hardware Compute Badge */}
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+            padding: "4px 12px",
+            borderRadius: "9999px",
+            background: isIntel ? "rgba(245, 158, 11, 0.12)" : "rgba(16, 185, 129, 0.12)",
+            border: isIntel ? "1px solid rgba(245, 158, 11, 0.3)" : "1px solid rgba(16, 185, 129, 0.3)",
+            fontSize: "11px",
+            color: isIntel ? "#fbbf24" : "#6ee7b7",
+            fontWeight: "500",
+            fontFamily: "'JetBrains Mono', monospace"
+          }}>
+            <span>{isIntel ? "🟡" : "🟢"}</span>
+            <span>WebGPU: {gpuState.info?.vendor} {gpuState.info?.architecture || gpuState.info?.device}</span>
+          </div>
+          {isIntel && (
+            <span style={{ fontSize: "10px", color: "#f59e0b", fontFamily: "'JetBrains Mono', monospace" }}>
+              (RTX 4050 configured: restart browser to switch)
+            </span>
+          )}
+        </div>
+      </header>
+
+      {/* Main Full-Bleed Bento Grid */}
+      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+        {/* Left Sidebar Workspace Dock */}
+        <aside className="anim-sidebar" style={{
+          width: "200px",
+          borderRight: "1px solid #27272a",
+          background: "#0c0c0e",
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "space-between",
+          padding: "16px 12px",
+          flexShrink: 0
+        }}>
+          <nav style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            <span style={{ fontSize: "10px", letterSpacing: "0.08em", textTransform: "uppercase", color: "#71717a", fontFamily: "'JetBrains Mono', monospace", padding: "0 10px", marginBottom: "8px", fontWeight: "600" }}>
+              Workspace
+            </span>
             <button
-              onClick={() => setIsDrawingMode(!isDrawingMode)}
+              onClick={() => setActiveTab("canvas")}
               style={{
-                padding: "6px 12px",
-                backgroundColor: isDrawingMode ? "#d9534f" : "#0275d8",
-                color: "#fff",
-                border: "none",
-                borderRadius: "4px",
-                cursor: "pointer",
-                fontWeight: "bold",
-                fontSize: "12px",
                 display: "flex",
                 alignItems: "center",
-                gap: "5px"
+                gap: "10px",
+                padding: "8px 12px",
+                borderRadius: "10px",
+                fontSize: "13px",
+                border: "none",
+                background: activeTab === "canvas" ? "#18181b" : "transparent",
+                color: activeTab === "canvas" ? "#fafafa" : "#a1a1aa",
+                cursor: "pointer",
+                textAlign: "left",
+                transition: "all 0.15s ease"
               }}
             >
-              <span>{isDrawingMode ? "🔴" : "🎯"}</span>
-              <span>{isDrawingMode ? "Drawing Active (Drag Box)" : "Draw Area on Map"}</span>
+              <span className="material-symbols-outlined" style={{ fontSize: "17px" }}>crop_free</span>
+              <span>Spatial Canvas</span>
             </button>
+            <button
+              onClick={handleFetchTelemetry}
+              disabled={isFetchingTelemetry}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "10px",
+                padding: "8px 12px",
+                borderRadius: "10px",
+                fontSize: "13px",
+                border: "none",
+                background: "transparent",
+                color: "#a1a1aa",
+                cursor: isFetchingTelemetry ? "not-allowed" : "pointer",
+                textAlign: "left",
+                transition: "all 0.15s ease"
+              }}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: "17px" }}>satellite_alt</span>
+              <span>{isFetchingTelemetry ? "Fetching Passes..." : "Footprints Pass"}</span>
+            </button>
+            {activeGeoJSON && (
+              <button
+                onClick={handleDownloadGeoJSON}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "10px",
+                  padding: "8px 12px",
+                  borderRadius: "10px",
+                  fontSize: "13px",
+                  border: "none",
+                  background: "transparent",
+                  color: "#10b981",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  transition: "all 0.15s ease"
+                }}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: "17px" }}>download</span>
+                <span>Export Bhuvan</span>
+              </button>
+            )}
+            <button
+              onClick={loadImageryForCurrentBbox}
+              disabled={isLoadingImagery}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "10px",
+                padding: "8px 12px",
+                borderRadius: "10px",
+                fontSize: "13px",
+                border: "none",
+                background: "transparent",
+                color: "#a1a1aa",
+                cursor: isLoadingImagery ? "not-allowed" : "pointer",
+                textAlign: "left",
+                transition: "all 0.15s ease"
+              }}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: "17px" }}>refresh</span>
+              <span>Refresh ROI</span>
+            </button>
+          </nav>
 
-            {/* Basemap Switcher */}
-            <div style={{ display: "flex", borderRadius: "6px", overflow: "hidden", border: "1px solid #cbd5e1" }}>
+          {/* Bottom Satellite Metadata */}
+          <div style={{ paddingTop: "14px", borderTop: "1px solid #1f1f23", display: "flex", flexDirection: "column", gap: "6px", padding: "10px 4px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "#71717a" }}>
+              <span>Constellation</span>
+              <span style={{ color: "#d4d4d8", fontFamily: "'JetBrains Mono', monospace" }}>Sentinel-1/2</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "#71717a" }}>
+              <span>Spatial GSD</span>
+              <span style={{ color: "#d4d4d8", fontFamily: "'JetBrains Mono', monospace" }}>10m Optical</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "#71717a" }}>
+              <span>Radar Band</span>
+              <span style={{ color: "#00e5ff", fontFamily: "'JetBrains Mono', monospace" }}>C-Band SAR</span>
+            </div>
+          </div>
+        </aside>
+
+        {/* Center Spatial Map Bento Card */}
+        <section className="anim-map" style={{
+          flex: "1",
+          margin: "12px",
+          display: "flex",
+          flexDirection: "column",
+          borderRadius: "16px",
+          border: "1px solid #27272a",
+          background: "#141416",
+          position: "relative",
+          overflow: "hidden"
+        }}>
+          {/* Top Floating Controls inside map */}
+          <div style={{
+            position: "absolute",
+            top: "14px",
+            left: "14px",
+            right: "14px",
+            zIndex: 1000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            pointerEvents: "none"
+          }}>
+            {/* Basemap Mode Switcher Pill */}
+            <div style={{
+              display: "flex",
+              alignItems: "center",
+              background: "rgba(12, 12, 14, 0.9)",
+              border: "1px solid #27272a",
+              borderRadius: "9999px",
+              padding: "3px",
+              pointerEvents: "auto",
+              boxShadow: "0 4px 12px rgba(0, 0, 0, 0.5)"
+            }}>
               <button
                 onClick={() => switchBaseMap("satellite")}
                 style={{
-                  padding: "5px 9px",
+                  padding: "4px 12px",
                   fontSize: "11px",
-                  background: baseMapMode === "satellite" ? "#0f172a" : "#fff",
-                  color: baseMapMode === "satellite" ? "#fff" : "#334155",
+                  borderRadius: "9999px",
                   border: "none",
+                  background: baseMapMode === "satellite" ? "#27272a" : "transparent",
+                  color: baseMapMode === "satellite" ? "#ffffff" : "#a1a1aa",
                   cursor: "pointer",
-                  fontWeight: baseMapMode === "satellite" ? "700" : "500"
+                  fontWeight: baseMapMode === "satellite" ? "600" : "400",
+                  transition: "all 0.15s ease"
                 }}
               >
-                🛰️ Satellite
+                Satellite
               </button>
               <button
                 onClick={() => switchBaseMap("hybrid")}
                 style={{
-                  padding: "5px 9px",
+                  padding: "4px 12px",
                   fontSize: "11px",
-                  background: baseMapMode === "hybrid" ? "#0f172a" : "#fff",
-                  color: baseMapMode === "hybrid" ? "#fff" : "#334155",
+                  borderRadius: "9999px",
                   border: "none",
-                  borderLeft: "1px solid #cbd5e1",
+                  background: baseMapMode === "hybrid" ? "#27272a" : "transparent",
+                  color: baseMapMode === "hybrid" ? "#ffffff" : "#a1a1aa",
                   cursor: "pointer",
-                  fontWeight: baseMapMode === "hybrid" ? "700" : "500"
+                  fontWeight: baseMapMode === "hybrid" ? "600" : "400",
+                  transition: "all 0.15s ease"
                 }}
               >
-                🏷️ Hybrid
+                Hybrid
               </button>
               <button
                 onClick={() => switchBaseMap("streets")}
                 style={{
-                  padding: "5px 9px",
+                  padding: "4px 12px",
                   fontSize: "11px",
-                  background: baseMapMode === "streets" ? "#0f172a" : "#fff",
-                  color: baseMapMode === "streets" ? "#fff" : "#334155",
+                  borderRadius: "9999px",
                   border: "none",
-                  borderLeft: "1px solid #cbd5e1",
+                  background: baseMapMode === "streets" ? "#27272a" : "transparent",
+                  color: baseMapMode === "streets" ? "#ffffff" : "#a1a1aa",
                   cursor: "pointer",
-                  fontWeight: baseMapMode === "streets" ? "700" : "500"
+                  fontWeight: baseMapMode === "streets" ? "600" : "400",
+                  transition: "all 0.15s ease"
                 }}
               >
-                🗺️ Streets
+                Streets
               </button>
+            </div>
+
+            {/* Adjust ROI / Draw Area Button */}
+            <button
+              onClick={() => setIsDrawingMode(!isDrawingMode)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                padding: "6px 14px",
+                borderRadius: "9999px",
+                background: isDrawingMode ? "#dc2626" : "rgba(12, 12, 14, 0.9)",
+                border: isDrawingMode ? "1px solid #ef4444" : "1px solid #27272a",
+                color: "#ffffff",
+                fontSize: "12px",
+                fontWeight: "500",
+                cursor: "pointer",
+                pointerEvents: "auto",
+                boxShadow: "0 4px 12px rgba(0, 0, 0, 0.5)",
+                transition: "all 0.15s ease"
+              }}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: "16px" }}>crop_free</span>
+              <span>{isDrawingMode ? "Drawing Active (Drag Box)" : "Adjust ROI"}</span>
+            </button>
+          </div>
+
+          {/* Leaflet Map Div */}
+          <div id="map" ref={mapRef} style={{ width: "100%", height: "100%", cursor: isDrawingMode ? "crosshair" : "default" }} />
+
+          {/* Bottom Floating Presets Bar */}
+          <div style={{
+            position: "absolute",
+            bottom: "14px",
+            left: "14px",
+            right: "14px",
+            zIndex: 1000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            pointerEvents: "none"
+          }}>
+            <div style={{ display: "flex", gap: "6px", pointerEvents: "auto", flexWrap: "wrap" }}>
+              {PRESET_REGIONS.map((p, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => setPreset(p.bbox)}
+                  style={{
+                    padding: "4px 12px",
+                    borderRadius: "9999px",
+                    fontSize: "11px",
+                    fontWeight: "500",
+                    background: "rgba(12, 12, 14, 0.9)",
+                    border: "1px solid #27272a",
+                    color: "#d4d4d8",
+                    cursor: "pointer",
+                    boxShadow: "0 2px 8px rgba(0, 0, 0, 0.4)",
+                    transition: "all 0.15s ease"
+                  }}
+                  onMouseOver={(e) => { e.currentTarget.style.background = "#27272a"; e.currentTarget.style.color = "#ffffff"; }}
+                  onMouseOut={(e) => { e.currentTarget.style.background = "rgba(12, 12, 14, 0.9)"; e.currentTarget.style.color = "#d4d4d8"; }}
+                >
+                  {p.name}
+                </button>
+              ))}
+            </div>
+
+            <div style={{
+              fontSize: "11px",
+              fontFamily: "'JetBrains Mono', monospace",
+              color: "#a1a1aa",
+              background: "rgba(12, 12, 14, 0.9)",
+              padding: "4px 10px",
+              borderRadius: "9999px",
+              border: "1px solid #27272a",
+              pointerEvents: "auto"
+            }}>
+              Updated today
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: "4px", alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ fontSize: "11px", color: "#64748b", fontWeight: "600" }}>Presets:</span>
-            {PRESET_REGIONS.map((p, idx) => (
-              <button
-                key={idx}
-                onClick={() => setPreset(p.bbox)}
-                style={{ padding: "4px 7px", fontSize: "10px", borderRadius: "10px", border: "1px solid #cbd5e1", background: "#f8fafc", cursor: "pointer", color: "#334155" }}
-              >
-                {p.name.split("/")[0].trim()}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Coordinate Inputs */}
-        <div style={{ display: "flex", gap: "10px", alignItems: "center", marginBottom: "8px", fontSize: "12px", background: "#f1f5f9", padding: "6px 10px", borderRadius: "6px" }}>
-          <label>Min Lon: <input type="number" step="0.01" value={minLon} onChange={(e) => setMinLon(parseFloat(e.target.value))} style={{ width: "65px", padding: "2px 4px" }} /></label>
-          <label>Min Lat: <input type="number" step="0.01" value={minLat} onChange={(e) => setMinLat(parseFloat(e.target.value))} style={{ width: "65px", padding: "2px 4px" }} /></label>
-          <label>Max Lon: <input type="number" step="0.01" value={maxLon} onChange={(e) => setMaxLon(parseFloat(e.target.value))} style={{ width: "65px", padding: "2px 4px" }} /></label>
-          <label>Max Lat: <input type="number" step="0.01" value={maxLat} onChange={(e) => setMaxLat(parseFloat(e.target.value))} style={{ width: "65px", padding: "2px 4px" }} /></label>
-          <span style={{ marginLeft: "auto", fontSize: "11px", color: "#d97706", fontWeight: "600" }}>
-            ✨ Drag handles on map to resize freely
-          </span>
-        </div>
-
-        {/* Leaflet Map with Satellite Basemap & Draggable Handles */}
-        <div id="map" ref={mapRef} style={{ flex: 1, minHeight: "340px", border: "1px solid #334155", borderRadius: "6px", cursor: isDrawingMode ? "crosshair" : "default" }} />
-
-        {/* Telemetry and Footprints action bar */}
-        <div style={{ marginTop: "8px", display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
-          <button onClick={handleFetchTelemetry} disabled={isFetchingTelemetry} style={{ padding: "6px 12px", cursor: "pointer", fontSize: "12px" }}>
-            {isFetchingTelemetry ? "Fetching Footprints..." : "Fetch Footprints Overlay"}
-          </button>
-          {activeGeoJSON && (
-            <button onClick={handleDownloadGeoJSON} style={{ padding: "6px 12px", cursor: "pointer", background: "#28a745", color: "#fff", border: "none", borderRadius: "4px", fontSize: "12px" }}>
-              Export ISRO Bhuvan GeoJSON
-            </button>
-          )}
-          {telemetrySummary && <span style={{ fontSize: "12px", color: "#333" }}>{telemetrySummary}</span>}
-        </div>
-      </div>
-
-      {/* Right VLM Imagery & Multi-Sensor Chat Pane (42%) */}
-      <div style={{ flex: "0 0 42%", display: "flex", flexDirection: "column", background: "#fdfdfd", boxSizing: "border-box" }}>
-        {/* Header */}
-        <div style={{ padding: "10px 16px", borderBottom: "1px solid #eee", background: "#fafafa", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <h3 style={{ margin: "0 0 2px 0", fontSize: "15px", color: "#0f172a" }}>Vision-Language Geospatial VLM</h3>
-            <span style={{ fontSize: "11px", color: "#64748b" }}>
-              Active Area: <strong>{selectedLocation?.city || "Selected Bounding Box"}</strong> ({minLon.toFixed(2)}E, {minLat.toFixed(2)}N)
-            </span>
-          </div>
-          <span style={{
-            fontSize: "10px",
-            background: "#eff6ff",
-            color: "#2563eb",
-            padding: "2px 8px",
-            borderRadius: "10px",
-            fontWeight: "600",
-            border: "1px solid #bfdbfe"
+          {/* Coordinate HUD Strip over map top-left */}
+          <div style={{
+            position: "absolute",
+            top: "62px",
+            left: "14px",
+            zIndex: 999,
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            background: "rgba(12, 12, 14, 0.9)",
+            border: "1px solid #27272a",
+            borderRadius: "8px",
+            padding: "5px 10px",
+            fontSize: "11px",
+            fontFamily: "'JetBrains Mono', monospace",
+            color: "#a1a1aa",
+            pointerEvents: "auto"
           }}>
-            ⚡ Client GPU Accelerated
-          </span>
-        </div>
+            <span style={{ color: "#00e5ff", fontWeight: "600" }}>ROI:</span>
+            <span>[{minLon.toFixed(2)}, {minLat.toFixed(2)}] to [{maxLon.toFixed(2)}, {maxLat.toFixed(2)}]</span>
+            <span style={{ color: "#71717a" }}>|</span>
+            <span style={{ color: "#10b981" }}>{selectedLocation?.city || "Selected Area"}</span>
+            <span style={{ color: "#71717a" }}>|</span>
+            <span>Elev: ~{Math.round(selectedLocation?.elevation_meters || 0)}m</span>
+          </div>
+        </section>
 
-        {/* Real Satellite Imagery Panel */}
-        <ImageryPanel
-          opticalCanvas={opticalCanvas}
-          sarCanvas={sarCanvas}
-          opticalScene={opticalScene}
-          sarScene={sarScene}
-          opticalAnalysis={opticalAnalysis}
-          sarAnalysis={sarAnalysis}
-          isLoadingImagery={isLoadingImagery}
-          imageryError={imageryError}
-          onRefresh={loadImageryForCurrentBbox}
-        />
+        {/* Right Panel Multi-Sensor AI Stack (42%) */}
+        <section style={{
+          width: "440px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "12px",
+          padding: "12px 12px 12px 0",
+          overflow: "hidden",
+          flexShrink: 0
+        }}>
+          {/* Card 1: Fused Imagery Preview Bento */}
+          <ImageryPanel
+            opticalCanvas={opticalCanvas}
+            sarCanvas={sarCanvas}
+            opticalScene={opticalScene}
+            sarScene={sarScene}
+            opticalAnalysis={opticalAnalysis}
+            sarAnalysis={sarAnalysis}
+            isLoadingImagery={isLoadingImagery}
+            imageryError={imageryError}
+            onRefresh={loadImageryForCurrentBbox}
+          />
 
-        {/* Context-Aware Quick Prompt Chips */}
-        <div style={{ padding: "6px 14px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0", display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
-          <span style={{ fontSize: "11px", color: "#64748b", fontWeight: "bold" }}>Try asking:</span>
-          {[
-            "Which city did I select?",
-            "Are there any oceans in this city?",
-            "What does the optical imagery show?",
-            "What does the SAR radar show?",
-            "Are there flood risks detected?"
-          ].map((sample, i) => (
-            <button
-              key={i}
-              onClick={() => handleSendMessage(sample)}
-              disabled={isSending}
-              style={{
-                fontSize: "10px",
-                padding: "3px 8px",
-                background: "#fff",
-                border: "1px solid #cbd5e1",
-                borderRadius: "10px",
-                cursor: isSending ? "not-allowed" : "pointer",
-                color: "#0369a1"
-              }}
-            >
-              {sample}
-            </button>
-          ))}
-        </div>
+          {/* Card 2: SatQuery AI Assistant & Conversational Terminal */}
+          <div className="anim-assistant" style={{
+            flex: 1,
+            borderRadius: "16px",
+            border: "1px solid #27272a",
+            background: "#141416",
+            padding: "16px",
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "space-between",
+            gap: "12px",
+            overflow: "hidden"
+          }}>
+            {/* Header */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingBottom: "10px", borderBottom: "1px solid #27272a" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <span className="material-symbols-outlined" style={{ fontSize: "18px", color: "#10b981" }}>auto_awesome</span>
+                <span style={{ fontSize: "14px", fontWeight: "600", color: "#ffffff" }}>SatQuery Assistant</span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "2px", height: "14px", padding: "2px 6px", background: "#18181b", borderRadius: "4px" }}>
+                  <div className="stream-bar-1" style={{ width: "2px", height: "8px", background: "#10b981", borderRadius: "9999px" }} />
+                  <div className="stream-bar-2" style={{ width: "2px", height: "11px", background: "#10b981", borderRadius: "9999px" }} />
+                  <div className="stream-bar-3" style={{ width: "2px", height: "6px", background: "#10b981", borderRadius: "9999px" }} />
+                </div>
+                <span style={{ fontSize: "11px", fontFamily: "'JetBrains Mono', monospace", color: "#a1a1aa" }}>Ready</span>
+              </div>
+            </div>
 
-        {/* Chat History */}
-        <div ref={chatScrollRef} style={{ flex: 1, padding: "14px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "10px" }}>
-          {messages.map((m, idx) => (
-            <div
-              key={idx}
-              style={{
-                alignSelf: m.role === "user" ? "flex-end" : "flex-start",
-                maxWidth: "88%",
-                padding: "10px 14px",
-                borderRadius: "12px",
-                fontSize: "13px",
-                lineHeight: "1.45",
-                background: m.role === "user" ? "#0275d8" : "#f1f3f5",
-                color: m.role === "user" ? "#fff" : "#212529",
-                boxShadow: "0 1px 2px rgba(0,0,0,0.08)",
-                whiteSpace: "pre-wrap"
-              }}
-            >
-              {m.content}
-              {m.webgpu && (
-                <div style={{ marginTop: "6px", fontSize: "10px", color: "#059669", fontWeight: "600", display: "flex", alignItems: "center", gap: "4px" }}>
-                  <span>⚡</span>
-                  <span>Processed on Local GPU with Optical & SAR Vision Grounding</span>
+            {/* Conversation Feed */}
+            <div ref={chatScrollRef} style={{
+              flex: 1,
+              overflowY: "auto",
+              display: "flex",
+              flexDirection: "column",
+              gap: "12px",
+              paddingRight: "4px",
+              overscrollBehavior: "contain"
+            }}>
+              {messages.map((m, idx) => (
+                <div key={idx} style={{
+                  alignSelf: m.role === "user" ? "flex-end" : "flex-start",
+                  maxWidth: "92%",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "4px"
+                }}>
+                  {m.role === "user" ? (
+                    <div style={{
+                      background: "#27272a",
+                      color: "#fafafa",
+                      padding: "8px 14px",
+                      borderRadius: "14px",
+                      borderTopRightRadius: "3px",
+                      fontSize: "13px",
+                      lineHeight: "1.45"
+                    }}>
+                      {m.content}
+                    </div>
+                  ) : (
+                    <div style={{
+                      background: "#0c0c0e",
+                      border: "1px solid #27272a",
+                      borderRadius: "12px",
+                      padding: "12px",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "4px"
+                    }}>
+                      <div style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace", color: "#10b981", fontWeight: "600" }}>
+                        SatQuery AI
+                      </div>
+                      <p style={{ fontSize: "13px", lineHeight: "1.5", color: "#e4e4e7", whiteSpace: "pre-wrap" }}>
+                        {m.content}
+                      </p>
+                      {m.webgpu && (
+                        <div style={{ marginTop: "6px", fontSize: "10px", color: "#10b981", display: "flex", alignItems: "center", gap: "4px", fontFamily: "'JetBrains Mono', monospace" }}>
+                          <span>⚡</span>
+                          <span>Local GPU Vision Grounding</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+              {isSending && (
+                <div style={{
+                  alignSelf: "flex-start",
+                  background: "#0c0c0e",
+                  border: "1px solid #27272a",
+                  borderRadius: "12px",
+                  padding: "10px 14px",
+                  fontSize: "12px",
+                  color: "#a1a1aa",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "4px"
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <span className="beacon-dot" style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#00e5ff", display: "inline-block" }} />
+                    <span>Synthesizing SAR &amp; Optical multi-sensor fusion...</span>
+                  </div>
+                  {modelLoadingStatus && (
+                    <span style={{ fontSize: "11px", color: "#00e5ff", fontFamily: "'JetBrains Mono', monospace" }}>
+                      {modelLoadingStatus}
+                    </span>
+                  )}
                 </div>
               )}
             </div>
-          ))}
-          {isSending && (
-            <div style={{ alignSelf: "flex-start", padding: "10px 14px", borderRadius: "12px", fontSize: "13px", background: "#f1f3f5", color: "#666", display: "flex", flexDirection: "column", gap: "4px" }}>
-              <span>Synthesizing SAR & Optical multi-sensor fusion...</span>
-              {modelLoadingStatus && (
-                <span style={{ fontSize: "11px", color: "#2563eb", fontWeight: "500" }}>
-                  {modelLoadingStatus}
-                </span>
-              )}
-            </div>
-          )}
-        </div>
 
-        {/* Chat Input */}
-        <div style={{ padding: "12px 14px", borderTop: "1px solid #eee", background: "#fafafa", display: "flex", gap: "8px" }}>
-          <input
-            type="text"
-            placeholder={`Ask about ${selectedLocation?.city || "this region"}'s satellite imagery, water bodies, or flood risks...`}
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleSendMessage();
-              }
-            }}
-            disabled={isSending}
-            style={{
-              flex: 1,
-              padding: "8px 12px",
-              borderRadius: "6px",
-              border: "1px solid #ccc",
-              fontSize: "13px",
-              outline: "none"
-            }}
-          />
-          <button
-            onClick={() => handleSendMessage()}
-            disabled={isSending || !inputText.trim()}
-            style={{
-              padding: "8px 16px",
-              background: isSending || !inputText.trim() ? "#aaa" : "#0275d8",
-              color: "#fff",
-              border: "none",
-              borderRadius: "6px",
-              cursor: isSending || !inputText.trim() ? "not-allowed" : "pointer",
-              fontWeight: "bold",
-              fontSize: "13px"
-            }}
-          >
-            Send
-          </button>
-        </div>
+            {/* Quick Action Prompt Pills */}
+            <div style={{ display: "flex", gap: "6px", overflowX: "auto", paddingBottom: "2px" }}>
+              {[
+                "Which city did I select?",
+                "Are there any oceans in this city?",
+                "Surface Water & Flood Risks",
+                "Vegetation & Crops",
+                "What does SAR radar show?"
+              ].map((sample, i) => (
+                <button
+                  key={i}
+                  onClick={() => handleSendMessage(sample)}
+                  disabled={isSending}
+                  style={{
+                    fontSize: "11px",
+                    padding: "4px 10px",
+                    borderRadius: "9999px",
+                    background: "#18181b",
+                    border: "1px solid #27272a",
+                    color: "#a1a1aa",
+                    cursor: isSending ? "not-allowed" : "pointer",
+                    whiteSpace: "nowrap",
+                    transition: "all 0.15s ease"
+                  }}
+                  onMouseOver={(e) => { e.currentTarget.style.color = "#ffffff"; e.currentTarget.style.borderColor = "#3f3f46"; }}
+                  onMouseOut={(e) => { e.currentTarget.style.color = "#a1a1aa"; e.currentTarget.style.borderColor = "#27272a"; }}
+                >
+                  {sample}
+                </button>
+              ))}
+            </div>
+
+            {/* Chat Input Bar */}
+            <div style={{ display: "flex", gap: "8px", position: "relative" }}>
+              <input
+                type="text"
+                placeholder={`Ask about ${selectedLocation?.city || "this region"}'s terrain, imagery, or water bodies...`}
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSendMessage();
+                  }
+                }}
+                disabled={isSending}
+                style={{
+                  flex: 1,
+                  padding: "10px 14px",
+                  borderRadius: "10px",
+                  border: "1px solid #27272a",
+                  background: "#0c0c0e",
+                  color: "#fafafa",
+                  fontSize: "13px",
+                  outline: "none",
+                  fontFamily: "'Inter', sans-serif"
+                }}
+                onFocus={(e) => { e.target.style.borderColor = "#3f3f46"; }}
+                onBlur={(e) => { e.target.style.borderColor = "#27272a"; }}
+              />
+              <button
+                onClick={() => handleSendMessage()}
+                disabled={isSending || !inputText.trim()}
+                style={{
+                  padding: "0 18px",
+                  borderRadius: "10px",
+                  border: "none",
+                  background: isSending || !inputText.trim() ? "#27272a" : "#b5ffe1",
+                  color: isSending || !inputText.trim() ? "#71717a" : "#003829",
+                  fontWeight: "600",
+                  fontSize: "13px",
+                  cursor: isSending || !inputText.trim() ? "not-allowed" : "pointer",
+                  transition: "all 0.15s ease"
+                }}
+              >
+                Ask
+              </button>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
   );

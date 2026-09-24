@@ -1,0 +1,197 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200');
+
+:root {
+  --bg-void: #09090b;
+  --surface-lowest: #0c0c0e;
+  --surface-low: #141416;
+  --surface-card: #18181b;
+  --surface-card-hover: #222226;
+  --surface-high: #27272a;
+  --border-subtle: #27272a;
+  --border-active: #3f3f46;
+  --text-primary: #fafafa;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+  --accent-emerald: #10b981;
+  --accent-cyan: #00e5ff;
+  --accent-amber: #f59e0b;
+  --accent-mint: #b5ffe1;
+  --ease-smooth: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  background-color: var(--bg-void);
+  color: var(--text-primary);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+}
+
+/* Animations */
+@keyframes enterFromTop {
+  0% { opacity: 0; transform: translateY(-8px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes enterFromLeft {
+  0% { opacity: 0; transform: translateX(-10px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes enterCenterBento {
+  0% { opacity: 0; transform: scale(0.988) translateY(6px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes enterFromBottom {
+  0% { opacity: 0; transform: translateY(10px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes beaconPulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.4); opacity: 0.4; }
+}
+
+@keyframes radarScan {
+  0% { transform: translateY(-100%); opacity: 0; }
+  15% { opacity: 0.55; }
+  85% { opacity: 0.55; }
+  100% { transform: translateY(800%); opacity: 0; }
+}
+
+@keyframes streamWave {
+  0%, 100% { opacity: 0.35; transform: scaleY(0.7); }
+  50% { opacity: 1; transform: scaleY(1.3); }
+}
+
+.anim-header {
+  animation: enterFromTop 0.5s var(--ease-smooth) forwards;
+  will-change: transform, opacity;
+}
+
+.anim-sidebar {
+  animation: enterFromLeft 0.55s var(--ease-smooth) 0.05s backwards;
+  will-change: transform, opacity;
+}
+
+.anim-map {
+  animation: enterCenterBento 0.6s var(--ease-smooth) 0.1s backwards;
+  will-change: transform, opacity;
+}
+
+.anim-sensory {
+  animation: enterFromBottom 0.55s var(--ease-smooth) 0.15s backwards;
+  will-change: transform, opacity;
+}
+
+.anim-assistant {
+  animation: enterFromBottom 0.6s var(--ease-smooth) 0.22s backwards;
+  will-change: transform, opacity;
+}
+
+.beacon-dot {
+  animation: beaconPulse 2.2s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+.stream-bar-1 { animation: streamWave 1.4s ease-in-out infinite; }
+.stream-bar-2 { animation: streamWave 1.4s ease-in-out 0.2s infinite; }
+.stream-bar-3 { animation: streamWave 1.4s ease-in-out 0.4s infinite; }
+
+/* Custom Leaflet Controls in Dark Theme */
+.leaflet-container {
+  background: #09090b !important;
+  font-family: inherit !important;
+}
+
+.leaflet-bar a {
+  background-color: #18181b !important;
+  border-bottom: 1px solid #27272a !important;
+  color: #fafafa !important;
+  transition: background-color 0.15s ease !important;
+}
+
+.leaflet-bar a:hover {
+  background-color: #27272a !important;
+  color: #fff !important;
+}
+
+.leaflet-control-attribution {
+  background: rgba(12, 12, 14, 0.75) !important;
+  color: #71717a !important;
+  font-size: 10px !important;
+  border-top-left-radius: 6px;
+}
+
+.leaflet-control-attribution a {
+  color: #a1a1aa !important;
+}
+
+/* Custom Marker Handles */
+.custom-bbox-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.12s var(--ease-smooth);
+}
+.custom-bbox-handle:hover {
+  transform: scale(1.25);
+}
+
+.custom-bbox-center {
+  transition: transform 0.15s var(--ease-smooth);
+}
+.custom-bbox-center:hover {
+  transform: scale(1.15);
+}
+
+/* Material Symbols */
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 18px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-header, .anim-sidebar, .anim-map, .anim-sensory, .anim-assistant,
+  .beacon-dot, .stream-bar-1, .stream-bar-2, .stream-bar-3 {
+    animation: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+  }
+}
