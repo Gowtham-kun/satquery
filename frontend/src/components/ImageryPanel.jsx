@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 
 export default function ImageryPanel({
+  hasBbox = true,
   opticalCanvas,
   sarCanvas,
   opticalScene,
@@ -16,9 +17,9 @@ export default function ImageryPanel({
   const optDataUrl = opticalCanvas ? opticalCanvas.toDataURL() : null;
   const sarDataUrl = sarCanvas ? sarCanvas.toDataURL() : null;
 
-  const vegPct = opticalAnalysis?.vegPct ?? 34;
-  const waterPct = opticalAnalysis?.waterPct ?? 8;
-  const urbanPct = opticalAnalysis?.urbanPct ?? 52;
+  const vegPct = opticalAnalysis?.vegPct ?? null;
+  const waterPct = opticalAnalysis?.waterPct ?? null;
+  const urbanPct = opticalAnalysis?.urbanPct ?? null;
 
   const floodColor = sarAnalysis?.floodRisk === 'HIGH' ? '#ef4444' : sarAnalysis?.floodRisk === 'MODERATE' ? '#f59e0b' : '#10b981';
 
@@ -38,27 +39,34 @@ export default function ImageryPanel({
           Sensory Analysis
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <span style={{ fontSize: '11px', color: '#10b981', display: 'flex', alignItems: 'center', gap: '5px', fontWeight: '500' }}>
-            <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#10b981', display: 'inline-block' }} />
-            Optical &amp; Radar Fused
-          </span>
+          {hasBbox ? (
+            <span style={{ fontSize: '11px', color: '#10b981', display: 'flex', alignItems: 'center', gap: '5px', fontWeight: '500' }}>
+              <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#10b981', display: 'inline-block' }} />
+              Optical &amp; Radar Fused
+            </span>
+          ) : (
+            <span style={{ fontSize: '11px', color: '#71717a', display: 'flex', alignItems: 'center', gap: '5px', fontWeight: '500', fontFamily: "'JetBrains Mono', monospace" }}>
+              <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#52525b', display: 'inline-block' }} />
+              Awaiting ROI Selection
+            </span>
+          )}
           <button
             onClick={onRefresh}
-            disabled={isLoadingImagery}
+            disabled={!hasBbox || isLoadingImagery}
             style={{
               padding: '3px 8px',
               fontSize: '10px',
               borderRadius: '9999px',
               border: '1px solid #27272a',
               background: '#18181b',
-              color: '#d4d4d8',
-              cursor: isLoadingImagery ? 'not-allowed' : 'pointer',
+              color: !hasBbox ? '#52525b' : '#d4d4d8',
+              cursor: !hasBbox || isLoadingImagery ? 'not-allowed' : 'pointer',
               display: 'flex',
               alignItems: 'center',
               gap: '4px',
               transition: 'all 0.15s ease'
             }}
-            title="Refresh satellite passes for current ROI"
+            title={hasBbox ? "Refresh satellite passes for current ROI" : "Select an ROI first"}
           >
             <span style={{ transform: isLoadingImagery ? 'rotate(180deg)' : 'none', transition: 'transform 0.5s ease', display: 'inline-block' }}>↻</span>
             <span>{isLoadingImagery ? 'Streaming...' : 'Refresh'}</span>
@@ -68,12 +76,14 @@ export default function ImageryPanel({
 
       {imageryError && (
         <div style={{
-          background: 'rgba(239, 68, 68, 0.1)',
-          border: '1px solid rgba(239, 68, 68, 0.3)',
+          background: '#1c1314',
+          border: '1px solid #3f2020',
+          borderLeft: '3px solid #ef4444',
           borderRadius: '8px',
           padding: '8px 12px',
           color: '#fca5a5',
-          fontSize: '11px'
+          fontSize: '11px',
+          fontFamily: "'JetBrains Mono', monospace"
         }}>
           {imageryError}
         </div>
@@ -88,7 +98,7 @@ export default function ImageryPanel({
             position: 'relative',
             borderRadius: '12px',
             overflow: 'hidden',
-            height: '115px',
+            height: '130px',
             background: '#0c0c0e',
             border: '1px solid #27272a',
             display: 'flex',
@@ -98,6 +108,12 @@ export default function ImageryPanel({
             cursor: optDataUrl ? 'pointer' : 'default',
             transition: 'border-color 0.15s ease'
           }}
+          onMouseOver={(e) => {
+            if (optDataUrl) e.currentTarget.style.borderColor = '#3f3f46';
+          }}
+          onMouseOut={(e) => {
+            e.currentTarget.style.borderColor = '#27272a';
+          }}
         >
           {optDataUrl ? (
             <img
@@ -106,17 +122,18 @@ export default function ImageryPanel({
               style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
             />
           ) : (
-            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#71717a', fontSize: '11px' }}>
-              {isLoadingImagery ? 'Streaming Optical Bands...' : 'Awaiting Sentinel-2 Pass'}
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#71717a', fontSize: '11px', padding: '12px', textAlign: 'center', gap: '6px' }}>
+              <span className="material-symbols-outlined" style={{ fontSize: '20px', color: '#52525b' }}>satellite_alt</span>
+              <span>{isLoadingImagery ? 'Streaming Optical Bands...' : hasBbox ? 'Awaiting Sentinel-2 Pass' : 'Select area on map'}</span>
             </div>
           )}
           <div style={{ position: 'relative', zIndex: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '9999px', background: 'rgba(12, 12, 14, 0.85)', color: '#fafafa', fontWeight: '500' }}>
+            <span style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '9999px', background: 'rgba(12, 12, 14, 0.9)', color: '#fafafa', fontWeight: '500', border: '1px solid #27272a' }}>
               True Color
             </span>
           </div>
-          <div style={{ position: 'relative', zIndex: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '10px', color: '#e4e4e7', fontFamily: "'JetBrains Mono', monospace", background: 'rgba(12, 12, 14, 0.85)', padding: '2px 7px', borderRadius: '4px' }}>
-            <span>{opticalScene?.cloud_cover !== undefined ? `${opticalScene.cloud_cover.toFixed(1)}% Cloud` : 'Clear Sky'}</span>
+          <div style={{ position: 'relative', zIndex: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '10px', color: '#e4e4e7', fontFamily: "'JetBrains Mono', monospace", background: 'rgba(12, 12, 14, 0.9)', padding: '2px 7px', borderRadius: '4px', border: '1px solid #27272a' }}>
+            <span>{opticalScene?.cloud_cover !== undefined ? `${opticalScene.cloud_cover.toFixed(1)}% Cloud` : hasBbox ? 'Clear Sky' : 'Standby'}</span>
             <span style={{ color: '#10b981' }}>Sentinel-2</span>
           </div>
         </div>
@@ -128,7 +145,7 @@ export default function ImageryPanel({
             position: 'relative',
             borderRadius: '12px',
             overflow: 'hidden',
-            height: '115px',
+            height: '130px',
             background: '#0c0c0e',
             border: '1px solid #27272a',
             display: 'flex',
@@ -138,6 +155,12 @@ export default function ImageryPanel({
             cursor: sarDataUrl ? 'pointer' : 'default',
             transition: 'border-color 0.15s ease'
           }}
+          onMouseOver={(e) => {
+            if (sarDataUrl) e.currentTarget.style.borderColor = '#3f3f46';
+          }}
+          onMouseOut={(e) => {
+            e.currentTarget.style.borderColor = '#27272a';
+          }}
         >
           {sarDataUrl ? (
             <img
@@ -146,20 +169,23 @@ export default function ImageryPanel({
               style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
             />
           ) : (
-            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#71717a', fontSize: '11px' }}>
-              {isLoadingImagery ? 'Streaming Radar Data...' : 'Awaiting Sentinel-1 Pass'}
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#71717a', fontSize: '11px', padding: '12px', textAlign: 'center', gap: '6px' }}>
+              <span className="material-symbols-outlined" style={{ fontSize: '20px', color: '#52525b' }}>radar</span>
+              <span>{isLoadingImagery ? 'Streaming Radar Data...' : hasBbox ? 'Awaiting Sentinel-1 Pass' : 'Select area on map'}</span>
             </div>
           )}
           <div style={{ position: 'relative', zIndex: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '9999px', background: 'rgba(12, 12, 14, 0.85)', color: '#00e5ff', fontWeight: '500' }}>
+            <span style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '9999px', background: 'rgba(12, 12, 14, 0.9)', color: '#00e5ff', fontWeight: '500', border: '1px solid #27272a' }}>
               Synthetic Radar
             </span>
-            <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', background: 'rgba(12, 12, 14, 0.85)', color: floodColor, fontWeight: '700' }}>
-              Flood: {sarAnalysis?.floodRisk || 'LOW'}
-            </span>
+            {hasBbox && sarAnalysis && (
+              <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', background: 'rgba(12, 12, 14, 0.9)', color: floodColor, fontWeight: '700', border: '1px solid #27272a' }}>
+                Flood: {sarAnalysis?.floodRisk || 'LOW'}
+              </span>
+            )}
           </div>
-          <div style={{ position: 'relative', zIndex: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '10px', color: '#e4e4e7', fontFamily: "'JetBrains Mono', monospace", background: 'rgba(12, 12, 14, 0.85)', padding: '2px 7px', borderRadius: '4px' }}>
-            <span>~{sarAnalysis?.estimatedMeanDb ?? -15} dB</span>
+          <div style={{ position: 'relative', zIndex: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '10px', color: '#e4e4e7', fontFamily: "'JetBrains Mono', monospace", background: 'rgba(12, 12, 14, 0.9)', padding: '2px 7px', borderRadius: '4px', border: '1px solid #27272a' }}>
+            <span>{hasBbox && sarAnalysis?.estimatedMeanDb !== undefined ? `~${sarAnalysis.estimatedMeanDb} dB` : 'Standby'}</span>
             <span style={{ color: '#00e5ff' }}>Sentinel-1</span>
           </div>
         </div>
@@ -168,14 +194,20 @@ export default function ImageryPanel({
       {/* Three-Pillar Land Cover Distribution Meter */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', paddingTop: '2px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '11px', color: '#a1a1aa', fontFamily: "'JetBrains Mono', monospace" }}>
-          <span>Urban {urbanPct}%</span>
-          <span>Vegetation {vegPct}%</span>
-          <span>Water {waterPct}%</span>
+          <span>Urban {urbanPct !== null ? `${urbanPct}%` : '--'}</span>
+          <span>Vegetation {vegPct !== null ? `${vegPct}%` : '--'}</span>
+          <span>Water {waterPct !== null ? `${waterPct}%` : '--'}</span>
         </div>
         <div style={{ width: '100%', height: '6px', borderRadius: '9999px', background: '#27272a', display: 'flex', overflow: 'hidden' }}>
-          <div style={{ width: `${urbanPct}%`, background: '#71717a', height: '100%', transition: 'width 0.4s var(--ease-smooth)' }} />
-          <div style={{ width: `${vegPct}%`, background: '#10b981', height: '100%', transition: 'width 0.4s var(--ease-smooth)' }} />
-          <div style={{ width: `${waterPct}%`, background: '#00e5ff', height: '100%', transition: 'width 0.4s var(--ease-smooth)' }} />
+          {urbanPct !== null ? (
+            <>
+              <div style={{ width: `${urbanPct}%`, background: '#71717a', height: '100%', transition: 'width 0.4s var(--ease-smooth)' }} />
+              <div style={{ width: `${vegPct}%`, background: '#10b981', height: '100%', transition: 'width 0.4s var(--ease-smooth)' }} />
+              <div style={{ width: `${waterPct}%`, background: '#00e5ff', height: '100%', transition: 'width 0.4s var(--ease-smooth)' }} />
+            </>
+          ) : (
+            <div style={{ width: '100%', background: '#18181b', height: '100%' }} />
+          )}
         </div>
       </div>
 
@@ -187,7 +219,7 @@ export default function ImageryPanel({
             position: 'fixed',
             inset: 0,
             zIndex: 999999,
-            background: 'rgba(0, 0, 0, 0.88)',
+            background: 'rgba(9, 9, 11, 0.95)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -197,13 +229,12 @@ export default function ImageryPanel({
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
-              background: '#141416',
+              background: '#0c0c0e',
               border: '1px solid #27272a',
               borderRadius: '16px',
               overflow: 'hidden',
               maxWidth: '680px',
-              width: '100%',
-              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.7)'
+              width: '100%'
             }}
           >
             <div style={{
@@ -211,7 +242,8 @@ export default function ImageryPanel({
               borderBottom: '1px solid #27272a',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'space-between'
+              justifyContent: 'space-between',
+              background: '#141416'
             }}>
               <span style={{ fontSize: '12px', fontWeight: '600', color: '#fafafa', fontFamily: "'JetBrains Mono', monospace" }}>
                 {previewModal.title}

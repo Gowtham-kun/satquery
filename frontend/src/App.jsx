@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import L from "leaflet";
 import { checkWebGPUCompatibility, runVlmInference } from "./services/webgpu.js";
+import { startPreload, waitForModel, subscribeModelPreload } from "./services/modelPreloader.js";
 import { fetchAndRenderOptical, fetchAndRenderSAR } from "./services/cogReader.js";
 import { analyzeOpticalCanvas, analyzeSarCanvas } from "./services/vlmVisionEngine.js";
 import GpuLockScreen from "./components/GpuLockScreen.jsx";
@@ -20,10 +21,16 @@ const PRESET_REGIONS = [
 
 export default function App() {
   const [gpuState, setGpuState] = useState({ checking: true, compatible: false, reason: "", info: null });
-  const [minLon, setMinLon] = useState(78.3);
-  const [minLat, setMinLat] = useState(17.3);
-  const [maxLon, setMaxLon] = useState(78.6);
-  const [maxLat, setMaxLat] = useState(17.5);
+  const [modelPreload, setModelPreload] = useState({ status: "idle", progress: 0, stage: "Standby", error: null });
+
+  // Clean slate initial state: null bbox
+  const [minLon, setMinLon] = useState(null);
+  const [minLat, setMinLat] = useState(null);
+  const [maxLon, setMaxLon] = useState(null);
+  const [maxLat, setMaxLat] = useState(null);
+
+  const hasBbox = minLon !== null && minLat !== null && maxLon !== null && maxLat !== null;
+
   const [isDrawingMode, setIsDrawingMode] = useState(false);
   const [baseMapMode, setBaseMapMode] = useState("satellite");
   const [activeTab, setActiveTab] = useState("canvas");
@@ -43,7 +50,7 @@ export default function App() {
   const [messages, setMessages] = useState([
     {
       role: "assistant",
-      content: "Observation pipeline initialized. Dual-sensor Sentinel-2 (Optical) and Sentinel-1 (C-Band SAR) fusion active. Drag corner handles or the center ✥ icon on the Spatial Canvas to adjust your Region of Interest (ROI), or select a preset region to begin visual geospatial queries."
+      content: "SatQuery AI operational. Dual-sensor Sentinel-2 (Optical) and Sentinel-1 (C-Band SAR) fusion active on client WebGPU.\n\nSelect an area on the spatial canvas with 'Select Area' or click any preset region below to stream satellite imagery passes and begin visual grounding."
     }
   ]);
   const [inputText, setInputText] = useState("");
@@ -71,11 +78,25 @@ export default function App() {
     currentBboxRef.current = { minLon, minLat, maxLon, maxLat };
   }, [minLon, minLat, maxLon, maxLat]);
 
+  useEffect(() => {
+    isDrawingModeRef.current = isDrawingMode;
+  }, [isDrawingMode]);
+
+  // Subscribe to eager model preloader
+  useEffect(() => {
+    const unsub = subscribeModelPreload((st) => {
+      setModelPreload(st);
+    });
+    return unsub;
+  }, []);
+
   const verifyGpu = async () => {
     setGpuState({ checking: true, compatible: false, reason: "", info: null });
     const res = await checkWebGPUCompatibility();
     if (res.isCompatible) {
       setGpuState({ checking: false, compatible: true, reason: "", info: res.gpuInfo });
+      // Eagerly trigger WebGPU Qwen2.5 VLM weights preloading in background immediately
+      startPreload();
     } else {
       setGpuState({ checking: false, compatible: false, reason: res.reason, info: null });
     }
@@ -85,12 +106,55 @@ export default function App() {
     verifyGpu();
   }, []);
 
-  useEffect(() => {
-    isDrawingModeRef.current = isDrawingMode;
-  }, [isDrawingMode]);
+  const createCornerIcon = (cursor) => L.divIcon({
+    className: "custom-bbox-handle",
+    html: `<div style="
+      width: 14px;
+      height: 14px;
+      background: #00e5ff;
+      border: 2px solid #ffffff;
+      border-radius: 50%;
+      box-shadow: 0 0 6px rgba(0, 229, 255, 0.8);
+      cursor: ${cursor};
+    "></div>`,
+    iconSize: [14, 14],
+    iconAnchor: [7, 7]
+  });
+
+  const createCenterIcon = () => L.divIcon({
+    className: "custom-bbox-center",
+    html: `<div style="
+      width: 26px;
+      height: 26px;
+      background: #0c0c0e;
+      border: 2px solid #00e5ff;
+      border-radius: 50%;
+      color: #00e5ff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: bold;
+      cursor: grab;
+    ">✥</div>`,
+    iconSize: [26, 26],
+    iconAnchor: [13, 13]
+  });
+
+  const removeBboxLayers = () => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    if (rectLayerRef.current) { map.removeLayer(rectLayerRef.current); rectLayerRef.current = null; }
+    if (nwHandleRef.current) { map.removeLayer(nwHandleRef.current); nwHandleRef.current = null; }
+    if (neHandleRef.current) { map.removeLayer(neHandleRef.current); neHandleRef.current = null; }
+    if (swHandleRef.current) { map.removeLayer(swHandleRef.current); swHandleRef.current = null; }
+    if (seHandleRef.current) { map.removeLayer(seHandleRef.current); seHandleRef.current = null; }
+    if (centerHandleRef.current) { map.removeLayer(centerHandleRef.current); centerHandleRef.current = null; }
+  };
 
   const updateVisualBbox = (coords) => {
     const { minLon: w, minLat: s, maxLon: e, maxLat: n } = coords;
+    if (w === null || s === null || e === null || n === null) return;
     const bounds = [[s, w], [n, e]];
     if (rectLayerRef.current) rectLayerRef.current.setBounds(bounds);
     if (nwHandleRef.current) nwHandleRef.current.setLatLng([n, w]);
@@ -102,10 +166,111 @@ export default function App() {
 
   const commitBbox = () => {
     const { minLon: w, minLat: s, maxLon: e, maxLat: n } = currentBboxRef.current;
+    if (w === null || s === null || e === null || n === null) return;
     setMinLon(parseFloat(w.toFixed(4)));
     setMinLat(parseFloat(s.toFixed(4)));
     setMaxLon(parseFloat(e.toFixed(4)));
     setMaxLat(parseFloat(n.toFixed(4)));
+  };
+
+  const setupBboxLayers = (w, s, e, n) => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    if (!rectLayerRef.current) {
+      const bounds = [[s, w], [n, e]];
+      rectLayerRef.current = L.rectangle(bounds, {
+        color: "#00e5ff",
+        weight: 1.8,
+        fillColor: "#00e5ff",
+        fillOpacity: 0.12,
+        dashArray: "4, 4"
+      }).addTo(map);
+
+      const nw = L.marker([n, w], { draggable: true, icon: createCornerIcon("nwse-resize"), zIndexOffset: 1000 }).addTo(map);
+      const ne = L.marker([n, e], { draggable: true, icon: createCornerIcon("nesw-resize"), zIndexOffset: 1000 }).addTo(map);
+      const sw = L.marker([s, w], { draggable: true, icon: createCornerIcon("nesw-resize"), zIndexOffset: 1000 }).addTo(map);
+      const se = L.marker([s, e], { draggable: true, icon: createCornerIcon("nwse-resize"), zIndexOffset: 1000 }).addTo(map);
+      const center = L.marker([(s + n) / 2, (w + e) / 2], { draggable: true, icon: createCenterIcon(), zIndexOffset: 999 }).addTo(map);
+
+      nw.bindTooltip("Drag to resize NW", { permanent: false, direction: "top" });
+      ne.bindTooltip("Drag to resize NE", { permanent: false, direction: "top" });
+      sw.bindTooltip("Drag to resize SW", { permanent: false, direction: "bottom" });
+      se.bindTooltip("Drag to resize SE", { permanent: false, direction: "bottom" });
+      center.bindTooltip("Drag ✥ to reposition area", { permanent: false, direction: "top" });
+
+      nw.on("drag", (evt) => {
+        const lat = evt.latlng.lat;
+        const lon = evt.latlng.lng;
+        if (lat > currentBboxRef.current.minLat + 0.01 && lon < currentBboxRef.current.maxLon - 0.01) {
+          currentBboxRef.current.maxLat = lat;
+          currentBboxRef.current.minLon = lon;
+          updateVisualBbox(currentBboxRef.current);
+        }
+      });
+      nw.on("dragend", commitBbox);
+
+      ne.on("drag", (evt) => {
+        const lat = evt.latlng.lat;
+        const lon = evt.latlng.lng;
+        if (lat > currentBboxRef.current.minLat + 0.01 && lon > currentBboxRef.current.minLon + 0.01) {
+          currentBboxRef.current.maxLat = lat;
+          currentBboxRef.current.maxLon = lon;
+          updateVisualBbox(currentBboxRef.current);
+        }
+      });
+      ne.on("dragend", commitBbox);
+
+      sw.on("drag", (evt) => {
+        const lat = evt.latlng.lat;
+        const lon = evt.latlng.lng;
+        if (lat < currentBboxRef.current.maxLat - 0.01 && lon < currentBboxRef.current.maxLon - 0.01) {
+          currentBboxRef.current.minLat = lat;
+          currentBboxRef.current.minLon = lon;
+          updateVisualBbox(currentBboxRef.current);
+        }
+      });
+      sw.on("dragend", commitBbox);
+
+      se.on("drag", (evt) => {
+        const lat = evt.latlng.lat;
+        const lon = evt.latlng.lng;
+        if (lat < currentBboxRef.current.maxLat - 0.01 && lon > currentBboxRef.current.minLon + 0.01) {
+          currentBboxRef.current.minLat = lat;
+          currentBboxRef.current.maxLon = lon;
+          updateVisualBbox(currentBboxRef.current);
+        }
+      });
+      se.on("dragend", commitBbox);
+
+      let centerDragStart = null;
+      center.on("dragstart", (evt) => {
+        centerDragStart = evt.latlng;
+      });
+      center.on("drag", (evt) => {
+        if (!centerDragStart) return;
+        const dLat = evt.latlng.lat - centerDragStart.lat;
+        const dLon = evt.latlng.lng - centerDragStart.lng;
+        currentBboxRef.current.minLon += dLon;
+        currentBboxRef.current.maxLon += dLon;
+        currentBboxRef.current.minLat += dLat;
+        currentBboxRef.current.maxLat += dLat;
+        centerDragStart = evt.latlng;
+        updateVisualBbox(currentBboxRef.current);
+      });
+      center.on("dragend", () => {
+        centerDragStart = null;
+        commitBbox();
+      });
+
+      nwHandleRef.current = nw;
+      neHandleRef.current = ne;
+      swHandleRef.current = sw;
+      seHandleRef.current = se;
+      centerHandleRef.current = center;
+    } else {
+      updateVisualBbox({ minLon: w, minLat: s, maxLon: e, maxLat: n });
+    }
   };
 
   const switchBaseMap = (mode) => {
@@ -135,6 +300,7 @@ export default function App() {
   };
 
   const loadImageryForCurrentBbox = async () => {
+    if (!hasBbox) return;
     setIsLoadingImagery(true);
     setImageryError("");
     try {
@@ -178,7 +344,20 @@ export default function App() {
     }
   };
 
+  // Geo-resolve and imagery load on bbox change
   useEffect(() => {
+    if (!hasBbox) {
+      setSelectedLocation(null);
+      setOpticalScene(null);
+      setSarScene(null);
+      setOpticalCanvas(null);
+      setSarCanvas(null);
+      setOpticalAnalysis(null);
+      setSarAnalysis(null);
+      setIsResolvingLocation(false);
+      return;
+    }
+
     setIsResolvingLocation(true);
     const timer = setTimeout(async () => {
       try {
@@ -221,13 +400,17 @@ export default function App() {
       } catch (_) {}
       setIsResolvingLocation(false);
       loadImageryForCurrentBbox();
-    }, 450);
+    }, 400);
+
     return () => clearTimeout(timer);
   }, [minLon, minLat, maxLon, maxLat]);
 
+  // Leaflet Map Initialization - Clean overview of India on load
   useEffect(() => {
     if (!gpuState.compatible || !mapRef.current || mapInstanceRef.current) return;
-    const map = L.map(mapRef.current, { zoomControl: false }).setView([(minLat + maxLat) / 2, (minLon + maxLon) / 2], 9);
+
+    // Center on India overview: lat 22.5, lon 78.5, zoom 5
+    const map = L.map(mapRef.current, { zoomControl: false }).setView([22.5, 78.5], 5);
     L.control.zoom({ position: "topright" }).addTo(map);
 
     const satTile = L.tileLayer(
@@ -236,176 +419,80 @@ export default function App() {
     ).addTo(map);
     tileLayerRef.current = satTile;
 
-    const bounds = [[minLat, minLon], [maxLat, maxLon]];
-    const rect = L.rectangle(bounds, {
-      color: "#00e5ff",
-      weight: 1.8,
-      fillColor: "#00e5ff",
-      fillOpacity: 0.12,
-      dashArray: "4, 4"
-    }).addTo(map);
-    rectLayerRef.current = rect;
-
-    const createCornerIcon = (cursor) => L.divIcon({
-      className: "custom-bbox-handle",
-      html: `<div style="
-        width: 14px;
-        height: 14px;
-        background: #00e5ff;
-        border: 2px solid #ffffff;
-        border-radius: 50%;
-        box-shadow: 0 0 8px rgba(0, 229, 255, 0.7);
-        cursor: ${cursor};
-      "></div>`,
-      iconSize: [14, 14],
-      iconAnchor: [7, 7]
-    });
-
-    const createCenterIcon = () => L.divIcon({
-      className: "custom-bbox-center",
-      html: `<div style="
-        width: 26px;
-        height: 26px;
-        background: rgba(12, 12, 14, 0.9);
-        border: 2px solid #00e5ff;
-        border-radius: 50%;
-        color: #00e5ff;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 13px;
-        font-weight: bold;
-        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.8);
-        cursor: grab;
-      ">✥</div>`,
-      iconSize: [26, 26],
-      iconAnchor: [13, 13]
-    });
-
-    const nw = L.marker([maxLat, minLon], { draggable: true, icon: createCornerIcon("nwse-resize"), zIndexOffset: 1000 }).addTo(map);
-    const ne = L.marker([maxLat, maxLon], { draggable: true, icon: createCornerIcon("nesw-resize"), zIndexOffset: 1000 }).addTo(map);
-    const sw = L.marker([minLat, minLon], { draggable: true, icon: createCornerIcon("nesw-resize"), zIndexOffset: 1000 }).addTo(map);
-    const se = L.marker([minLat, maxLon], { draggable: true, icon: createCornerIcon("nwse-resize"), zIndexOffset: 1000 }).addTo(map);
-    const center = L.marker([(minLat + maxLat) / 2, (minLon + maxLon) / 2], { draggable: true, icon: createCenterIcon(), zIndexOffset: 999 }).addTo(map);
-
-    nw.bindTooltip("Drag to resize NW", { permanent: false, direction: "top" });
-    ne.bindTooltip("Drag to resize NE", { permanent: false, direction: "top" });
-    sw.bindTooltip("Drag to resize SW", { permanent: false, direction: "bottom" });
-    se.bindTooltip("Drag to resize SE", { permanent: false, direction: "bottom" });
-    center.bindTooltip("Drag ✥ to reposition area", { permanent: false, direction: "top" });
-
-    nw.on("drag", (e) => {
-      const lat = e.latlng.lat;
-      const lon = e.latlng.lng;
-      if (lat > currentBboxRef.current.minLat + 0.01 && lon < currentBboxRef.current.maxLon - 0.01) {
-        currentBboxRef.current.maxLat = lat;
-        currentBboxRef.current.minLon = lon;
-        updateVisualBbox(currentBboxRef.current);
-      }
-    });
-    nw.on("dragend", commitBbox);
-
-    ne.on("drag", (e) => {
-      const lat = e.latlng.lat;
-      const lon = e.latlng.lng;
-      if (lat > currentBboxRef.current.minLat + 0.01 && lon > currentBboxRef.current.minLon + 0.01) {
-        currentBboxRef.current.maxLat = lat;
-        currentBboxRef.current.maxLon = lon;
-        updateVisualBbox(currentBboxRef.current);
-      }
-    });
-    ne.on("dragend", commitBbox);
-
-    sw.on("drag", (e) => {
-      const lat = e.latlng.lat;
-      const lon = e.latlng.lng;
-      if (lat < currentBboxRef.current.maxLat - 0.01 && lon < currentBboxRef.current.maxLon - 0.01) {
-        currentBboxRef.current.minLat = lat;
-        currentBboxRef.current.minLon = lon;
-        updateVisualBbox(currentBboxRef.current);
-      }
-    });
-    sw.on("dragend", commitBbox);
-
-    se.on("drag", (e) => {
-      const lat = e.latlng.lat;
-      const lon = e.latlng.lng;
-      if (lat < currentBboxRef.current.maxLat - 0.01 && lon > currentBboxRef.current.minLon + 0.01) {
-        currentBboxRef.current.minLat = lat;
-        currentBboxRef.current.maxLon = lon;
-        updateVisualBbox(currentBboxRef.current);
-      }
-    });
-    se.on("dragend", commitBbox);
-
-    let centerDragStart = null;
-    center.on("dragstart", (e) => {
-      centerDragStart = e.latlng;
-    });
-    center.on("drag", (e) => {
-      if (!centerDragStart) return;
-      const dLat = e.latlng.lat - centerDragStart.lat;
-      const dLon = e.latlng.lng - centerDragStart.lng;
-      currentBboxRef.current.minLon += dLon;
-      currentBboxRef.current.maxLon += dLon;
-      currentBboxRef.current.minLat += dLat;
-      currentBboxRef.current.maxLat += dLat;
-      centerDragStart = e.latlng;
-      updateVisualBbox(currentBboxRef.current);
-    });
-    center.on("dragend", () => {
-      centerDragStart = null;
-      commitBbox();
-    });
-
-    nwHandleRef.current = nw;
-    neHandleRef.current = ne;
-    swHandleRef.current = sw;
-    seHandleRef.current = se;
-    centerHandleRef.current = center;
     mapInstanceRef.current = map;
 
     let isDrawing = false;
     let startLatLng = null;
+    let tempRect = null;
 
     map.on("mousedown", (e) => {
       if (!isDrawingModeRef.current && !e.originalEvent.shiftKey) return;
       map.dragging.disable();
       isDrawing = true;
       startLatLng = e.latlng;
+      if (tempRect) {
+        map.removeLayer(tempRect);
+        tempRect = null;
+      }
     });
 
     map.on("mousemove", (e) => {
       if (!isDrawing || !startLatLng) return;
       const currentBounds = L.latLngBounds(startLatLng, e.latlng);
-      rectLayerRef.current.setBounds(currentBounds);
+      if (rectLayerRef.current) {
+        rectLayerRef.current.setBounds(currentBounds);
+      } else {
+        if (!tempRect) {
+          tempRect = L.rectangle(currentBounds, {
+            color: "#00e5ff",
+            weight: 1.8,
+            fillColor: "#00e5ff",
+            fillOpacity: 0.12,
+            dashArray: "4, 4"
+          }).addTo(map);
+        } else {
+          tempRect.setBounds(currentBounds);
+        }
+      }
     });
 
     map.on("mouseup", (e) => {
       if (!isDrawing || !startLatLng) return;
       map.dragging.enable();
       isDrawing = false;
+      if (tempRect) {
+        map.removeLayer(tempRect);
+        tempRect = null;
+      }
       const currentBounds = L.latLngBounds(startLatLng, e.latlng);
-      rectLayerRef.current.setBounds(currentBounds);
       const w = parseFloat(currentBounds.getWest().toFixed(4));
       const s = parseFloat(currentBounds.getSouth().toFixed(4));
       const e_lon = parseFloat(currentBounds.getEast().toFixed(4));
       const n = parseFloat(currentBounds.getNorth().toFixed(4));
-      currentBboxRef.current = { minLon: w, minLat: s, maxLon: e_lon, maxLat: n };
-      updateVisualBbox(currentBboxRef.current);
-      setMinLon(w);
-      setMinLat(s);
-      setMaxLon(e_lon);
-      setMaxLat(n);
+
+      // Guard against accidental micro-clicks (< 0.01 deg)
+      if (Math.abs(e_lon - w) > 0.01 && Math.abs(n - s) > 0.01) {
+        currentBboxRef.current = { minLon: w, minLat: s, maxLon: e_lon, maxLat: n };
+        setupBboxLayers(w, s, e_lon, n);
+        setMinLon(w);
+        setMinLat(s);
+        setMaxLon(e_lon);
+        setMaxLat(n);
+      }
       startLatLng = null;
       setIsDrawingMode(false);
     });
   }, [gpuState.compatible]);
 
+  // Sync visual bbox layers when coordinates change externally
   useEffect(() => {
-    if (!mapInstanceRef.current || !rectLayerRef.current) return;
-    updateVisualBbox({ minLon, minLat, maxLon, maxLat });
-  }, [minLon, minLat, maxLon, maxLat]);
+    if (!mapInstanceRef.current) return;
+    if (hasBbox) {
+      setupBboxLayers(minLon, minLat, maxLon, maxLat);
+    } else {
+      removeBboxLayers();
+    }
+  }, [minLon, minLat, maxLon, maxLat, hasBbox]);
 
   useEffect(() => {
     if (chatScrollRef.current) {
@@ -414,12 +501,34 @@ export default function App() {
   }, [messages, isSending, modelLoadingStatus]);
 
   const setPreset = (bbox) => {
-    setMinLon(bbox[0]);
-    setMinLat(bbox[1]);
-    setMaxLon(bbox[2]);
-    setMaxLat(bbox[3]);
+    const [w, s, e, n] = bbox;
+    currentBboxRef.current = { minLon: w, minLat: s, maxLon: e, maxLat: n };
+    setMinLon(w);
+    setMinLat(s);
+    setMaxLon(e);
+    setMaxLat(n);
+    setupBboxLayers(w, s, e, n);
     if (mapInstanceRef.current) {
-      mapInstanceRef.current.fitBounds([[bbox[1], bbox[0]], [bbox[3], bbox[2]]]);
+      mapInstanceRef.current.fitBounds([[s, w], [n, e]], { padding: [40, 40], maxZoom: 11 });
+    }
+  };
+
+  const clearROI = () => {
+    removeBboxLayers();
+    currentBboxRef.current = { minLon: null, minLat: null, maxLon: null, maxLat: null };
+    setMinLon(null);
+    setMinLat(null);
+    setMaxLon(null);
+    setMaxLat(null);
+    setSelectedLocation(null);
+    setOpticalScene(null);
+    setSarScene(null);
+    setOpticalCanvas(null);
+    setSarCanvas(null);
+    setOpticalAnalysis(null);
+    setSarAnalysis(null);
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.setView([22.5, 78.5], 5);
     }
   };
 
@@ -427,20 +536,36 @@ export default function App() {
     const query = (customText || inputText).trim();
     if (!query || isSending) return;
 
+    // If user asks before selecting an area, prompt or default to Hyderabad
+    if (!hasBbox) {
+      setPreset(PRESET_REGIONS[0].bbox); // Default to Hyderabad for seamless experience
+    }
+
+    const currentW = hasBbox ? minLon : PRESET_REGIONS[0].bbox[0];
+    const currentS = hasBbox ? minLat : PRESET_REGIONS[0].bbox[1];
+    const currentE = hasBbox ? maxLon : PRESET_REGIONS[0].bbox[2];
+    const currentN = hasBbox ? maxLat : PRESET_REGIONS[0].bbox[3];
+
     const newHistory = [...messages, { role: "user", content: query }];
     setMessages(newHistory);
     setInputText("");
     setIsSending(true);
 
     try {
+      // Eager preloader check: if still loading in background, wait cleanly
+      if (modelPreload.status === "loading") {
+        setModelLoadingStatus(`Awaiting WebGPU model preload: ${modelPreload.stage}`);
+        await waitForModel();
+      }
+
       setModelLoadingStatus("Executing multi-sensor VLM inference on client WebGPU...");
       const result = await runVlmInference({
-        geoContext: selectedLocation,
+        geoContext: selectedLocation || { city: "Hyderabad", state: "Telangana", country: "India", elevation_meters: 536 },
         opticalAnalysis,
         sarAnalysis,
         opticalScene,
         sarScene,
-        bbox: [minLon, minLat, maxLon, maxLat],
+        bbox: [currentW, currentS, currentE, currentN],
         userQuery: query,
         onProgress: (p) => {
           if (p?.status === "progress" && p.total) {
@@ -463,6 +588,7 @@ export default function App() {
   };
 
   const handleFetchTelemetry = async () => {
+    if (!hasBbox) return;
     setIsFetchingTelemetry(true);
     try {
       const res = await fetch(`${API_BASE}/api/satellite/fetch`, {
@@ -530,8 +656,8 @@ export default function App() {
         justifyContent: "center",
         fontFamily: "'Inter', sans-serif"
       }}>
-        <div style={{ fontSize: "28px", marginBottom: "14px" }}>⚡</div>
-        <div style={{ fontSize: "15px", fontWeight: "600", color: "#fafafa", marginBottom: "6px" }}>
+        <div style={{ fontSize: "24px", marginBottom: "12px", color: "#10b981" }}>⚡</div>
+        <div style={{ fontSize: "14px", fontWeight: "600", color: "#fafafa", marginBottom: "6px" }}>
           Scanning WebGPU Hardware Compute...
         </div>
         <div style={{ fontSize: "12px", color: "#71717a", fontFamily: "'JetBrains Mono', monospace" }}>
@@ -562,29 +688,65 @@ export default function App() {
         zIndex: 50,
         flexShrink: 0
       }}>
+        {/* Brand & Subtitle */}
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#10b981", boxShadow: "0 0 8px rgba(16, 185, 129, 0.7)" }} />
+          <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#10b981" }} />
           <span style={{ fontWeight: "600", letterSpacing: "-0.02em", fontSize: "15px", color: "#ffffff" }}>SatQuery AI</span>
           <span style={{ fontSize: "11px", color: "#71717a", fontFamily: "'JetBrains Mono', monospace", marginLeft: "4px" }}>
             Earth Observation · SIH 167
           </span>
         </div>
 
-        {/* Center Live Pipeline Indicator */}
-        <div style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "6px",
-          padding: "4px 12px",
-          borderRadius: "9999px",
-          background: "#141416",
-          border: "1px solid #27272a",
-          fontSize: "11px",
-          color: "#a1a1aa",
-          fontFamily: "'JetBrains Mono', monospace"
-        }}>
-          <span className="beacon-dot" style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#10b981", display: "inline-block" }} />
-          <span>Live Sensor Pipeline Active</span>
+        {/* Center Live Status & Eager Model Preload Badge */}
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          {/* Live Sensor Pipeline */}
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+            padding: "4px 12px",
+            borderRadius: "9999px",
+            background: "#141416",
+            border: "1px solid #27272a",
+            fontSize: "11px",
+            color: "#a1a1aa",
+            fontFamily: "'JetBrains Mono', monospace"
+          }}>
+            <span className="beacon-dot" style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#10b981", display: "inline-block" }} />
+            <span>Dual-Sensor Pipeline Ready</span>
+          </div>
+
+          {/* Model Eager Preload Status Badge */}
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+            padding: "4px 12px",
+            borderRadius: "9999px",
+            background: modelPreload.status === "ready" ? "rgba(16, 185, 129, 0.08)" : modelPreload.status === "loading" ? "rgba(0, 229, 255, 0.08)" : "#141416",
+            border: modelPreload.status === "ready" ? "1px solid rgba(16, 185, 129, 0.3)" : modelPreload.status === "loading" ? "1px solid rgba(0, 229, 255, 0.3)" : "1px solid #27272a",
+            fontSize: "11px",
+            color: modelPreload.status === "ready" ? "#6ee7b7" : modelPreload.status === "loading" ? "#00e5ff" : "#a1a1aa",
+            fontFamily: "'JetBrains Mono', monospace",
+            fontWeight: "500"
+          }}>
+            <span style={{
+              width: "6px",
+              height: "6px",
+              borderRadius: "50%",
+              background: modelPreload.status === "ready" ? "#10b981" : modelPreload.status === "loading" ? "#00e5ff" : "#71717a",
+              display: "inline-block"
+            }} />
+            <span>
+              {modelPreload.status === "ready"
+                ? `VLM Ready (${gpuState.info?.vendor?.toLowerCase().includes("nvidia") ? "RTX 4050" : "WebGPU"})`
+                : modelPreload.status === "loading"
+                ? `VLM Preloading: ${modelPreload.progress}%`
+                : modelPreload.status === "error"
+                ? "VLM Fallback"
+                : "VLM Standby"}
+            </span>
+          </div>
         </div>
 
         {/* Right GPU Hardware Compute Badge */}
@@ -595,7 +757,7 @@ export default function App() {
             gap: "6px",
             padding: "4px 12px",
             borderRadius: "9999px",
-            background: isIntel ? "rgba(245, 158, 11, 0.12)" : "rgba(16, 185, 129, 0.12)",
+            background: isIntel ? "rgba(245, 158, 11, 0.08)" : "rgba(16, 185, 129, 0.08)",
             border: isIntel ? "1px solid rgba(245, 158, 11, 0.3)" : "1px solid rgba(16, 185, 129, 0.3)",
             fontSize: "11px",
             color: isIntel ? "#fbbf24" : "#6ee7b7",
@@ -630,6 +792,8 @@ export default function App() {
             <span style={{ fontSize: "10px", letterSpacing: "0.08em", textTransform: "uppercase", color: "#71717a", fontFamily: "'JetBrains Mono', monospace", padding: "0 10px", marginBottom: "8px", fontWeight: "600" }}>
               Workspace
             </span>
+
+            {/* Spatial Canvas Button */}
             <button
               onClick={() => setActiveTab("canvas")}
               style={{
@@ -637,40 +801,68 @@ export default function App() {
                 alignItems: "center",
                 gap: "10px",
                 padding: "8px 12px",
-                borderRadius: "10px",
+                borderRadius: "8px",
                 fontSize: "13px",
                 border: "none",
+                borderLeft: activeTab === "canvas" ? "2px solid #10b981" : "2px solid transparent",
                 background: activeTab === "canvas" ? "#18181b" : "transparent",
                 color: activeTab === "canvas" ? "#fafafa" : "#a1a1aa",
                 cursor: "pointer",
                 textAlign: "left",
                 transition: "all 0.15s ease"
               }}
+              onMouseOver={(e) => {
+                if (activeTab !== "canvas") {
+                  e.currentTarget.style.background = "#141416";
+                  e.currentTarget.style.color = "#ffffff";
+                }
+              }}
+              onMouseOut={(e) => {
+                if (activeTab !== "canvas") {
+                  e.currentTarget.style.background = "transparent";
+                  e.currentTarget.style.color = "#a1a1aa";
+                }
+              }}
             >
-              <span className="material-symbols-outlined" style={{ fontSize: "17px" }}>crop_free</span>
+              <span className="material-symbols-outlined" style={{ fontSize: "17px", color: activeTab === "canvas" ? "#10b981" : "#a1a1aa" }}>crop_free</span>
               <span>Spatial Canvas</span>
             </button>
+
+            {/* Footprints Pass Button */}
             <button
               onClick={handleFetchTelemetry}
-              disabled={isFetchingTelemetry}
+              disabled={!hasBbox || isFetchingTelemetry}
               style={{
                 display: "flex",
                 alignItems: "center",
                 gap: "10px",
                 padding: "8px 12px",
-                borderRadius: "10px",
+                borderRadius: "8px",
                 fontSize: "13px",
                 border: "none",
+                borderLeft: "2px solid transparent",
                 background: "transparent",
-                color: "#a1a1aa",
-                cursor: isFetchingTelemetry ? "not-allowed" : "pointer",
+                color: !hasBbox ? "#52525b" : "#a1a1aa",
+                cursor: !hasBbox || isFetchingTelemetry ? "not-allowed" : "pointer",
                 textAlign: "left",
                 transition: "all 0.15s ease"
+              }}
+              onMouseOver={(e) => {
+                if (hasBbox && !isFetchingTelemetry) {
+                  e.currentTarget.style.background = "#141416";
+                  e.currentTarget.style.color = "#ffffff";
+                }
+              }}
+              onMouseOut={(e) => {
+                e.currentTarget.style.background = "transparent";
+                e.currentTarget.style.color = !hasBbox ? "#52525b" : "#a1a1aa";
               }}
             >
               <span className="material-symbols-outlined" style={{ fontSize: "17px" }}>satellite_alt</span>
               <span>{isFetchingTelemetry ? "Fetching Passes..." : "Footprints Pass"}</span>
             </button>
+
+            {/* Export Bhuvan GeoJSON Button */}
             {activeGeoJSON && (
               <button
                 onClick={handleDownloadGeoJSON}
@@ -679,10 +871,11 @@ export default function App() {
                   alignItems: "center",
                   gap: "10px",
                   padding: "8px 12px",
-                  borderRadius: "10px",
+                  borderRadius: "8px",
                   fontSize: "13px",
                   border: "none",
-                  background: "transparent",
+                  borderLeft: "2px solid #10b981",
+                  background: "#141416",
                   color: "#10b981",
                   cursor: "pointer",
                   textAlign: "left",
@@ -693,27 +886,71 @@ export default function App() {
                 <span>Export Bhuvan</span>
               </button>
             )}
+
+            {/* Refresh ROI Button */}
             <button
               onClick={loadImageryForCurrentBbox}
-              disabled={isLoadingImagery}
+              disabled={!hasBbox || isLoadingImagery}
               style={{
                 display: "flex",
                 alignItems: "center",
                 gap: "10px",
                 padding: "8px 12px",
-                borderRadius: "10px",
+                borderRadius: "8px",
                 fontSize: "13px",
                 border: "none",
+                borderLeft: "2px solid transparent",
                 background: "transparent",
-                color: "#a1a1aa",
-                cursor: isLoadingImagery ? "not-allowed" : "pointer",
+                color: !hasBbox ? "#52525b" : "#a1a1aa",
+                cursor: !hasBbox || isLoadingImagery ? "not-allowed" : "pointer",
                 textAlign: "left",
                 transition: "all 0.15s ease"
+              }}
+              onMouseOver={(e) => {
+                if (hasBbox && !isLoadingImagery) {
+                  e.currentTarget.style.background = "#141416";
+                  e.currentTarget.style.color = "#ffffff";
+                }
+              }}
+              onMouseOut={(e) => {
+                e.currentTarget.style.background = "transparent";
+                e.currentTarget.style.color = !hasBbox ? "#52525b" : "#a1a1aa";
               }}
             >
               <span className="material-symbols-outlined" style={{ fontSize: "17px" }}>refresh</span>
               <span>Refresh ROI</span>
             </button>
+
+            {/* Clear ROI Button */}
+            {hasBbox && (
+              <button
+                onClick={clearROI}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "10px",
+                  padding: "8px 12px",
+                  borderRadius: "8px",
+                  fontSize: "13px",
+                  border: "none",
+                  borderLeft: "2px solid transparent",
+                  background: "transparent",
+                  color: "#f87171",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  transition: "all 0.15s ease"
+                }}
+                onMouseOver={(e) => {
+                  e.currentTarget.style.background = "#1c1314";
+                }}
+                onMouseOut={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                }}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: "17px" }}>clear</span>
+                <span>Clear Selection</span>
+              </button>
+            )}
           </nav>
 
           {/* Bottom Satellite Metadata */}
@@ -761,12 +998,11 @@ export default function App() {
             <div style={{
               display: "flex",
               alignItems: "center",
-              background: "rgba(12, 12, 14, 0.9)",
+              background: "#0c0c0e",
               border: "1px solid #27272a",
               borderRadius: "9999px",
               padding: "3px",
-              pointerEvents: "auto",
-              boxShadow: "0 4px 12px rgba(0, 0, 0, 0.5)"
+              pointerEvents: "auto"
             }}>
               <button
                 onClick={() => switchBaseMap("satellite")}
@@ -818,29 +1054,59 @@ export default function App() {
               </button>
             </div>
 
-            {/* Adjust ROI / Draw Area Button */}
-            <button
-              onClick={() => setIsDrawingMode(!isDrawingMode)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-                padding: "6px 14px",
-                borderRadius: "9999px",
-                background: isDrawingMode ? "#dc2626" : "rgba(12, 12, 14, 0.9)",
-                border: isDrawingMode ? "1px solid #ef4444" : "1px solid #27272a",
-                color: "#ffffff",
-                fontSize: "12px",
-                fontWeight: "500",
-                cursor: "pointer",
-                pointerEvents: "auto",
-                boxShadow: "0 4px 12px rgba(0, 0, 0, 0.5)",
-                transition: "all 0.15s ease"
-              }}
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: "16px" }}>crop_free</span>
-              <span>{isDrawingMode ? "Drawing Active (Drag Box)" : "Adjust ROI"}</span>
-            </button>
+            {/* Action Buttons: Adjust/Select ROI & Clear ROI */}
+            <div style={{ display: "flex", gap: "8px", pointerEvents: "auto" }}>
+              {hasBbox && (
+                <button
+                  onClick={clearROI}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    padding: "6px 12px",
+                    borderRadius: "9999px",
+                    background: "#0c0c0e",
+                    border: "1px solid #27272a",
+                    color: "#f87171",
+                    fontSize: "12px",
+                    fontWeight: "500",
+                    cursor: "pointer",
+                    transition: "all 0.15s ease"
+                  }}
+                  onMouseOver={(e) => { e.currentTarget.style.borderColor = "#ef4444"; }}
+                  onMouseOut={(e) => { e.currentTarget.style.borderColor = "#27272a"; }}
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: "15px" }}>close</span>
+                  <span>Clear ROI</span>
+                </button>
+              )}
+              <button
+                onClick={() => setIsDrawingMode(!isDrawingMode)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  padding: "6px 14px",
+                  borderRadius: "9999px",
+                  background: isDrawingMode ? "#dc2626" : "#0c0c0e",
+                  border: isDrawingMode ? "1px solid #ef4444" : "1px solid #27272a",
+                  color: "#ffffff",
+                  fontSize: "12px",
+                  fontWeight: "500",
+                  cursor: "pointer",
+                  transition: "all 0.15s ease"
+                }}
+                onMouseOver={(e) => {
+                  if (!isDrawingMode) e.currentTarget.style.borderColor = "#3f3f46";
+                }}
+                onMouseOut={(e) => {
+                  if (!isDrawingMode) e.currentTarget.style.borderColor = "#27272a";
+                }}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: "16px" }}>crop_free</span>
+                <span>{isDrawingMode ? "Drawing Active (Drag Box)" : hasBbox ? "Adjust ROI" : "Select Area"}</span>
+              </button>
+            </div>
           </div>
 
           {/* Leaflet Map Div */}
@@ -868,15 +1134,14 @@ export default function App() {
                     borderRadius: "9999px",
                     fontSize: "11px",
                     fontWeight: "500",
-                    background: "rgba(12, 12, 14, 0.9)",
+                    background: "#0c0c0e",
                     border: "1px solid #27272a",
                     color: "#d4d4d8",
                     cursor: "pointer",
-                    boxShadow: "0 2px 8px rgba(0, 0, 0, 0.4)",
                     transition: "all 0.15s ease"
                   }}
                   onMouseOver={(e) => { e.currentTarget.style.background = "#27272a"; e.currentTarget.style.color = "#ffffff"; }}
-                  onMouseOut={(e) => { e.currentTarget.style.background = "rgba(12, 12, 14, 0.9)"; e.currentTarget.style.color = "#d4d4d8"; }}
+                  onMouseOut={(e) => { e.currentTarget.style.background = "#0c0c0e"; e.currentTarget.style.color = "#d4d4d8"; }}
                 >
                   {p.name}
                 </button>
@@ -887,7 +1152,7 @@ export default function App() {
               fontSize: "11px",
               fontFamily: "'JetBrains Mono', monospace",
               color: "#a1a1aa",
-              background: "rgba(12, 12, 14, 0.9)",
+              background: "#0c0c0e",
               padding: "4px 10px",
               borderRadius: "9999px",
               border: "1px solid #27272a",
@@ -906,7 +1171,7 @@ export default function App() {
             display: "flex",
             alignItems: "center",
             gap: "8px",
-            background: "rgba(12, 12, 14, 0.9)",
+            background: "#0c0c0e",
             border: "1px solid #27272a",
             borderRadius: "8px",
             padding: "5px 10px",
@@ -915,16 +1180,49 @@ export default function App() {
             color: "#a1a1aa",
             pointerEvents: "auto"
           }}>
-            <span style={{ color: "#00e5ff", fontWeight: "600" }}>ROI:</span>
-            <span>[{minLon.toFixed(2)}, {minLat.toFixed(2)}] to [{maxLon.toFixed(2)}, {maxLat.toFixed(2)}]</span>
-            <span style={{ color: "#71717a" }}>|</span>
-            <span style={{ color: "#10b981" }}>{selectedLocation?.city || "Selected Area"}</span>
-            <span style={{ color: "#71717a" }}>|</span>
-            <span>Elev: ~{Math.round(selectedLocation?.elevation_meters || 0)}m</span>
+            {hasBbox ? (
+              <>
+                <span style={{ color: "#00e5ff", fontWeight: "600" }}>ROI:</span>
+                <span>[{minLon.toFixed(2)}, {minLat.toFixed(2)}] to [{maxLon.toFixed(2)}, {maxLat.toFixed(2)}]</span>
+                <span style={{ color: "#71717a" }}>|</span>
+                <span style={{ color: "#10b981" }}>{selectedLocation?.city || "Selected Area"}</span>
+                <span style={{ color: "#71717a" }}>|</span>
+                <span>Elev: ~{Math.round(selectedLocation?.elevation_meters || 0)}m</span>
+              </>
+            ) : (
+              <>
+                <span style={{ color: "#00e5ff", fontWeight: "600" }}>Overview:</span>
+                <span>All India Extent · Click 'Select Area' or pick a preset below</span>
+              </>
+            )}
           </div>
+
+          {/* Floating Helper Banner when no bbox is selected */}
+          {!hasBbox && (
+            <div style={{
+              position: "absolute",
+              bottom: "60px",
+              left: "50%",
+              transform: "translateX(-50%)",
+              zIndex: 999,
+              background: "#0c0c0e",
+              border: "1px solid #27272a",
+              borderRadius: "8px",
+              padding: "8px 16px",
+              display: "flex",
+              alignItems: "center",
+              gap: "10px",
+              fontSize: "12px",
+              color: "#d4d4d8",
+              pointerEvents: "auto"
+            }}>
+              <span className="material-symbols-outlined" style={{ fontSize: "16px", color: "#00e5ff" }}>info</span>
+              <span>Select an area on the map or click any preset region below to begin analysis.</span>
+            </div>
+          )}
         </section>
 
-        {/* Right Panel Multi-Sensor AI Stack (42%) */}
+        {/* Right Panel Multi-Sensor AI Stack (440px) */}
         <section style={{
           width: "440px",
           display: "flex",
@@ -936,6 +1234,7 @@ export default function App() {
         }}>
           {/* Card 1: Fused Imagery Preview Bento */}
           <ImageryPanel
+            hasBbox={hasBbox}
             opticalCanvas={opticalCanvas}
             sarCanvas={sarCanvas}
             opticalScene={opticalScene}
@@ -972,7 +1271,9 @@ export default function App() {
                   <div className="stream-bar-2" style={{ width: "2px", height: "11px", background: "#10b981", borderRadius: "9999px" }} />
                   <div className="stream-bar-3" style={{ width: "2px", height: "6px", background: "#10b981", borderRadius: "9999px" }} />
                 </div>
-                <span style={{ fontSize: "11px", fontFamily: "'JetBrains Mono', monospace", color: "#a1a1aa" }}>Ready</span>
+                <span style={{ fontSize: "11px", fontFamily: "'JetBrains Mono', monospace", color: "#a1a1aa" }}>
+                  {isSending ? "Synthesizing" : modelPreload.status === "loading" ? "Preloading" : "Ready"}
+                </span>
               </div>
             </div>
 
@@ -1010,6 +1311,7 @@ export default function App() {
                     <div style={{
                       background: "#0c0c0e",
                       border: "1px solid #27272a",
+                      borderLeft: "2px solid #10b981",
                       borderRadius: "12px",
                       padding: "12px",
                       display: "flex",
@@ -1037,16 +1339,21 @@ export default function App() {
                   alignSelf: "flex-start",
                   background: "#0c0c0e",
                   border: "1px solid #27272a",
+                  borderLeft: "2px solid #00e5ff",
                   borderRadius: "12px",
                   padding: "10px 14px",
                   fontSize: "12px",
                   color: "#a1a1aa",
                   display: "flex",
                   flexDirection: "column",
-                  gap: "4px"
+                  gap: "6px"
                 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                    <span className="beacon-dot" style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#00e5ff", display: "inline-block" }} />
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <div style={{ display: "flex", gap: "3px" }}>
+                      <span className="typing-dot-1" style={{ width: "4px", height: "4px", borderRadius: "50%", background: "#00e5ff", display: "inline-block" }} />
+                      <span className="typing-dot-2" style={{ width: "4px", height: "4px", borderRadius: "50%", background: "#00e5ff", display: "inline-block" }} />
+                      <span className="typing-dot-3" style={{ width: "4px", height: "4px", borderRadius: "50%", background: "#00e5ff", display: "inline-block" }} />
+                    </div>
                     <span>Synthesizing SAR &amp; Optical multi-sensor fusion...</span>
                   </div>
                   {modelLoadingStatus && (
@@ -1094,7 +1401,7 @@ export default function App() {
             <div style={{ display: "flex", gap: "8px", position: "relative" }}>
               <input
                 type="text"
-                placeholder={`Ask about ${selectedLocation?.city || "this region"}'s terrain, imagery, or water bodies...`}
+                placeholder={hasBbox ? `Ask about ${selectedLocation?.city || "this region"}'s terrain, imagery, or water bodies...` : "Select an area on the map or ask a question..."}
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 onKeyDown={(e) => {
@@ -1107,15 +1414,16 @@ export default function App() {
                 style={{
                   flex: 1,
                   padding: "10px 14px",
-                  borderRadius: "10px",
+                  borderRadius: "8px",
                   border: "1px solid #27272a",
                   background: "#0c0c0e",
                   color: "#fafafa",
                   fontSize: "13px",
                   outline: "none",
-                  fontFamily: "'Inter', sans-serif"
+                  fontFamily: "'Inter', sans-serif",
+                  transition: "border-color 0.15s ease"
                 }}
-                onFocus={(e) => { e.target.style.borderColor = "#3f3f46"; }}
+                onFocus={(e) => { e.target.style.borderColor = "#00e5ff"; }}
                 onBlur={(e) => { e.target.style.borderColor = "#27272a"; }}
               />
               <button
@@ -1123,7 +1431,7 @@ export default function App() {
                 disabled={isSending || !inputText.trim()}
                 style={{
                   padding: "0 18px",
-                  borderRadius: "10px",
+                  borderRadius: "8px",
                   border: "none",
                   background: isSending || !inputText.trim() ? "#27272a" : "#b5ffe1",
                   color: isSending || !inputText.trim() ? "#71717a" : "#003829",
