@@ -25,10 +25,30 @@
   --ease-smooth: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-* {
+*, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
+
+::selection {
+  background: transparent;
+}
+
+input, textarea, [contenteditable="true"] {
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
+  user-select: text;
+}
+
+input::selection, textarea::selection {
+  background: rgba(0, 229, 255, 0.3);
+  color: #ffffff;
 }
 
 html, body {
@@ -84,26 +104,9 @@ button:focus-visible, input:focus-visible {
   100% { opacity: 1; transform: translateY(0); }
 }
 
-@keyframes beaconPulse {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.4); opacity: 0.4; }
-}
-
-@keyframes radarScan {
-  0% { transform: translateY(-100%); opacity: 0; }
-  15% { opacity: 0.55; }
-  85% { opacity: 0.55; }
-  100% { transform: translateY(800%); opacity: 0; }
-}
-
 @keyframes streamWave {
   0%, 100% { opacity: 0.35; transform: scaleY(0.7); }
   50% { opacity: 1; transform: scaleY(1.3); }
-}
-
-@keyframes typingDot {
-  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
-  40% { transform: scale(1); opacity: 1; }
 }
 
 .anim-header {
@@ -131,27 +134,27 @@ button:focus-visible, input:focus-visible {
   will-change: transform, opacity;
 }
 
-.beacon-dot {
-  animation: beaconPulse 2.2s ease-in-out infinite;
-  will-change: transform, opacity;
-}
-
 .stream-bar-1 { animation: streamWave 1.4s ease-in-out infinite; }
 .stream-bar-2 { animation: streamWave 1.4s ease-in-out 0.2s infinite; }
 .stream-bar-3 { animation: streamWave 1.4s ease-in-out 0.4s infinite; }
-
-.typing-dot-1 { animation: typingDot 1.4s infinite ease-in-out; }
-.typing-dot-2 { animation: typingDot 1.4s infinite ease-in-out 0.2s; }
-.typing-dot-3 { animation: typingDot 1.4s infinite ease-in-out 0.4s; }
 
 /* Custom Leaflet Controls in Dark Theme */
 .leaflet-container {
   background: #09090b !important;
   font-family: inherit !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+.leaflet-bar {
+  border: 1px solid #27272a !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+  box-shadow: none !important;
 }
 
 .leaflet-bar a {
-  background-color: #18181b !important;
+  background-color: #0c0c0e !important;
   border-bottom: 1px solid #27272a !important;
   color: #fafafa !important;
   transition: background-color 0.15s ease !important;
@@ -160,6 +163,11 @@ button:focus-visible, input:focus-visible {
 .leaflet-bar a:hover {
   background-color: #27272a !important;
   color: #fff !important;
+}
+
+.leaflet-bottom.leaflet-right .leaflet-control-zoom {
+  margin-bottom: 52px !important;
+  margin-right: 14px !important;
 }
 
 .leaflet-control-attribution {
@@ -182,10 +190,13 @@ button:focus-visible, input:focus-visible {
   transition: transform 0.12s var(--ease-smooth);
 }
 .custom-bbox-handle:hover {
-  transform: scale(1.25);
+  transform: scale(1.3);
 }
 
 .custom-bbox-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   transition: transform 0.15s var(--ease-smooth);
 }
 .custom-bbox-center:hover {
@@ -209,8 +220,7 @@ button:focus-visible, input:focus-visible {
 
 @media (prefers-reduced-motion: reduce) {
   .anim-header, .anim-sidebar, .anim-map, .anim-sensory, .anim-assistant,
-  .beacon-dot, .stream-bar-1, .stream-bar-2, .stream-bar-3,
-  .typing-dot-1, .typing-dot-2, .typing-dot-3 {
+  .stream-bar-1, .stream-bar-2, .stream-bar-3 {
     animation: none !important;
     transform: none !important;
     opacity: 1 !important;

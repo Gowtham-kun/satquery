@@ -40,13 +40,11 @@ export default function ImageryPanel({
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           {hasBbox ? (
-            <span style={{ fontSize: '11px', color: '#10b981', display: 'flex', alignItems: 'center', gap: '5px', fontWeight: '500' }}>
-              <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#10b981', display: 'inline-block' }} />
+            <span style={{ fontSize: '11px', color: '#10b981', fontWeight: '500', fontFamily: "'JetBrains Mono', monospace" }}>
               Optical &amp; Radar Fused
             </span>
           ) : (
-            <span style={{ fontSize: '11px', color: '#71717a', display: 'flex', alignItems: 'center', gap: '5px', fontWeight: '500', fontFamily: "'JetBrains Mono', monospace" }}>
-              <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#52525b', display: 'inline-block' }} />
+            <span style={{ fontSize: '11px', color: '#71717a', fontWeight: '500', fontFamily: "'JetBrains Mono', monospace" }}>
               Awaiting ROI Selection
             </span>
           )}

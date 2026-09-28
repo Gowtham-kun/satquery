@@ -109,36 +109,37 @@ export default function App() {
   const createCornerIcon = (cursor) => L.divIcon({
     className: "custom-bbox-handle",
     html: `<div style="
-      width: 14px;
-      height: 14px;
+      width: 12px;
+      height: 12px;
       background: #00e5ff;
-      border: 2px solid #ffffff;
-      border-radius: 50%;
-      box-shadow: 0 0 6px rgba(0, 229, 255, 0.8);
+      border: 1px solid #ffffff;
+      border-radius: 2px;
       cursor: ${cursor};
+      user-select: none;
     "></div>`,
-    iconSize: [14, 14],
-    iconAnchor: [7, 7]
+    iconSize: [12, 12],
+    iconAnchor: [6, 6]
   });
 
   const createCenterIcon = () => L.divIcon({
     className: "custom-bbox-center",
     html: `<div style="
-      width: 26px;
-      height: 26px;
+      width: 28px;
+      height: 28px;
       background: #0c0c0e;
-      border: 2px solid #00e5ff;
-      border-radius: 50%;
+      border: 1.5px solid #00e5ff;
+      border-radius: 4px;
       color: #00e5ff;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 13px;
+      font-size: 15px;
       font-weight: bold;
       cursor: grab;
+      user-select: none;
     ">✥</div>`,
-    iconSize: [26, 26],
-    iconAnchor: [13, 13]
+    iconSize: [28, 28],
+    iconAnchor: [14, 14]
   });
 
   const removeBboxLayers = () => {
@@ -152,7 +153,7 @@ export default function App() {
     if (centerHandleRef.current) { map.removeLayer(centerHandleRef.current); centerHandleRef.current = null; }
   };
 
-  const updateVisualBbox = (coords) => {
+  const updateVisualBbox = (coords, skipCenter = false) => {
     const { minLon: w, minLat: s, maxLon: e, maxLat: n } = coords;
     if (w === null || s === null || e === null || n === null) return;
     const bounds = [[s, w], [n, e]];
@@ -161,7 +162,9 @@ export default function App() {
     if (neHandleRef.current) neHandleRef.current.setLatLng([n, e]);
     if (swHandleRef.current) swHandleRef.current.setLatLng([s, w]);
     if (seHandleRef.current) seHandleRef.current.setLatLng([s, e]);
-    if (centerHandleRef.current) centerHandleRef.current.setLatLng([(s + n) / 2, (w + e) / 2]);
+    if (!skipCenter && centerHandleRef.current) {
+      centerHandleRef.current.setLatLng([(s + n) / 2, (w + e) / 2]);
+    }
   };
 
   const commitBbox = () => {
@@ -243,23 +246,37 @@ export default function App() {
       });
       se.on("dragend", commitBbox);
 
-      let centerDragStart = null;
+      let centerDragOrigin = null;
+      let bboxAtDragStart = null;
+
       center.on("dragstart", (evt) => {
-        centerDragStart = evt.latlng;
+        centerDragOrigin = evt.target.getLatLng();
+        bboxAtDragStart = { ...currentBboxRef.current };
       });
+
       center.on("drag", (evt) => {
-        if (!centerDragStart) return;
-        const dLat = evt.latlng.lat - centerDragStart.lat;
-        const dLon = evt.latlng.lng - centerDragStart.lng;
-        currentBboxRef.current.minLon += dLon;
-        currentBboxRef.current.maxLon += dLon;
-        currentBboxRef.current.minLat += dLat;
-        currentBboxRef.current.maxLat += dLat;
-        centerDragStart = evt.latlng;
-        updateVisualBbox(currentBboxRef.current);
+        if (!centerDragOrigin || !bboxAtDragStart) return;
+        const currentPos = evt.target.getLatLng();
+        const dLat = currentPos.lat - centerDragOrigin.lat;
+        const dLon = currentPos.lng - centerDragOrigin.lng;
+
+        currentBboxRef.current = {
+          minLon: bboxAtDragStart.minLon + dLon,
+          maxLon: bboxAtDragStart.maxLon + dLon,
+          minLat: bboxAtDragStart.minLat + dLat,
+          maxLat: bboxAtDragStart.maxLat + dLat
+        };
+
+        updateVisualBbox(currentBboxRef.current, true);
       });
+
       center.on("dragend", () => {
-        centerDragStart = null;
+        centerDragOrigin = null;
+        bboxAtDragStart = null;
+        const { minLon: w, minLat: s, maxLon: e, maxLat: n } = currentBboxRef.current;
+        if (centerHandleRef.current) {
+          centerHandleRef.current.setLatLng([(s + n) / 2, (w + e) / 2]);
+        }
         commitBbox();
       });
 
@@ -411,7 +428,7 @@ export default function App() {
 
     // Center on India overview: lat 22.5, lon 78.5, zoom 5
     const map = L.map(mapRef.current, { zoomControl: false }).setView([22.5, 78.5], 5);
-    L.control.zoom({ position: "topright" }).addTo(map);
+    L.control.zoom({ position: "bottomright" }).addTo(map);
 
     const satTile = L.tileLayer(
       "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
@@ -689,11 +706,10 @@ export default function App() {
         flexShrink: 0
       }}>
         {/* Brand & Subtitle */}
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#10b981" }} />
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <span style={{ fontWeight: "600", letterSpacing: "-0.02em", fontSize: "15px", color: "#ffffff" }}>SatQuery AI</span>
           <span style={{ fontSize: "11px", color: "#71717a", fontFamily: "'JetBrains Mono', monospace", marginLeft: "4px" }}>
-            Earth Observation · SIH 167
+            Earth Observation
           </span>
         </div>
 
@@ -703,7 +719,6 @@ export default function App() {
           <div style={{
             display: "flex",
             alignItems: "center",
-            gap: "6px",
             padding: "4px 12px",
             borderRadius: "9999px",
             background: "#141416",
@@ -712,7 +727,6 @@ export default function App() {
             color: "#a1a1aa",
             fontFamily: "'JetBrains Mono', monospace"
           }}>
-            <span className="beacon-dot" style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#10b981", display: "inline-block" }} />
             <span>Dual-Sensor Pipeline Ready</span>
           </div>
 
@@ -720,7 +734,6 @@ export default function App() {
           <div style={{
             display: "flex",
             alignItems: "center",
-            gap: "6px",
             padding: "4px 12px",
             borderRadius: "9999px",
             background: modelPreload.status === "ready" ? "rgba(16, 185, 129, 0.08)" : modelPreload.status === "loading" ? "rgba(0, 229, 255, 0.08)" : "#141416",
@@ -730,13 +743,6 @@ export default function App() {
             fontFamily: "'JetBrains Mono', monospace",
             fontWeight: "500"
           }}>
-            <span style={{
-              width: "6px",
-              height: "6px",
-              borderRadius: "50%",
-              background: modelPreload.status === "ready" ? "#10b981" : modelPreload.status === "loading" ? "#00e5ff" : "#71717a",
-              display: "inline-block"
-            }} />
             <span>
               {modelPreload.status === "ready"
                 ? `VLM Ready (${gpuState.info?.vendor?.toLowerCase().includes("nvidia") ? "RTX 4050" : "WebGPU"})`
@@ -754,7 +760,6 @@ export default function App() {
           <div style={{
             display: "flex",
             alignItems: "center",
-            gap: "6px",
             padding: "4px 12px",
             borderRadius: "9999px",
             background: isIntel ? "rgba(245, 158, 11, 0.08)" : "rgba(16, 185, 129, 0.08)",
@@ -764,7 +769,6 @@ export default function App() {
             fontWeight: "500",
             fontFamily: "'JetBrains Mono', monospace"
           }}>
-            <span>{isIntel ? "🟡" : "🟢"}</span>
             <span>WebGPU: {gpuState.info?.vendor} {gpuState.info?.architecture || gpuState.info?.device}</span>
           </div>
           {isIntel && (
@@ -1192,7 +1196,7 @@ export default function App() {
             ) : (
               <>
                 <span style={{ color: "#00e5ff", fontWeight: "600" }}>Overview:</span>
-                <span>All India Extent · Click 'Select Area' or pick a preset below</span>
+                <span>All India Extent | Click 'Select Area' or pick a preset below</span>
               </>
             )}
           </div>
@@ -1349,11 +1353,7 @@ export default function App() {
                   gap: "6px"
                 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                    <div style={{ display: "flex", gap: "3px" }}>
-                      <span className="typing-dot-1" style={{ width: "4px", height: "4px", borderRadius: "50%", background: "#00e5ff", display: "inline-block" }} />
-                      <span className="typing-dot-2" style={{ width: "4px", height: "4px", borderRadius: "50%", background: "#00e5ff", display: "inline-block" }} />
-                      <span className="typing-dot-3" style={{ width: "4px", height: "4px", borderRadius: "50%", background: "#00e5ff", display: "inline-block" }} />
-                    </div>
+                    <span className="material-symbols-outlined" style={{ fontSize: "14px", color: "#00e5ff" }}>sync</span>
                     <span>Synthesizing SAR &amp; Optical multi-sensor fusion...</span>
                   </div>
                   {modelLoadingStatus && (
